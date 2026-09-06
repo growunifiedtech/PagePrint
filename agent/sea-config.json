@@ -1,0 +1,5 @@
+{
+  "main": "d:/print/agent/index.js",
+  "output": "d:/print/agent/sea-prep.blob",
+  "disableExperimentalSEAWarning": true
+}

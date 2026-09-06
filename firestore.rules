@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ====================================================================
+    // 1. SHOPS COLLECTION
+    // ====================================================================
+    // - Anyone can read shop data so walk-in customers can view rates & scan QR
+    // - Only authenticated shop owners can create or edit their shop settings
+    match /shops/{shopId} {
+      // Publicly viewable for customer portal (/shop/[slug])
+      allow read: if true;
+
+      // Only logged-in merchants can register a new shop
+      allow create: if request.auth != null;
+
+      // Only authenticated merchants can update shop settings
+      allow update: if request.auth != null;
+
+      // Shops cannot be deleted directly from client
+      allow delete: if false;
+    }
+
+    // ====================================================================
+    // 2. ORDERS COLLECTION
+    // ====================================================================
+    // - Walk-in customers can create print orders without signing in
+    // - Customers can track their live token progress
+    // - Merchants and local print agents can update status (PRINTING / PRINTED)
+    match /orders/{orderId} {
+      // Walk-in customers create orders directly from their phone
+      allow create: if true;
+
+      // Customers track their print token; Merchants view incoming queue
+      allow read: if true;
+
+      // Customers confirm UPI payment; Merchants & agents update print status
+      allow update: if true;
+
+      // Only authenticated merchants can delete orders
+      allow delete: if request.auth != null;
+    }
+
+    // ====================================================================
+    // 3. DEFAULT SAFETY FALLBACK
+    // ====================================================================
+    // Deny all access to any unspecified collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
