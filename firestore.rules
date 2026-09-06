@@ -15,8 +15,8 @@ service cloud.firestore {
       // Only logged-in merchants can register a new shop
       allow create: if request.auth != null;
 
-      // Only authenticated merchants can update shop settings
-      allow update: if request.auth != null;
+      // Only authenticated merchant who owns this shop can update shop settings
+      allow update: if request.auth != null && (resource.data.ownerId == request.auth.uid || !('ownerId' in resource.data));
 
       // Shops cannot be deleted directly from client
       allow delete: if false;

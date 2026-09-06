@@ -58,6 +58,18 @@ export default function MerchantDashboardPage() {
     );
   }
 
+  // If user is not authenticated, block render and let useEffect redirect
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="text-center space-y-3">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-indigo-600 border-r-transparent"></div>
+          <p className="text-sm font-semibold text-slate-600">Redirecting to login...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!shop) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 p-4">
@@ -90,7 +102,10 @@ export default function MerchantDashboardPage() {
 
   // Real action handlers with instant privacy auto-deletion
   const handlePrintOrder = async (order: Order) => {
-    await updateOrderStatusInCloud(order.id, { printStatus: 'PRINTING' });
+    await updateOrderStatusInCloud(order.id, { 
+      printStatus: 'PRINTING',
+      paymentStatus: 'PAID'
+    });
     playNewOrderChime();
     
     // Auto-mark printed and trigger instant privacy deletion

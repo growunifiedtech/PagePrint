@@ -464,23 +464,38 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 <CheckCircle2 className="h-7 w-7 sm:h-8 sm:w-8" />
               </div>
 
-              <div>
-                <span className="text-xs font-bold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full">
-                  Order Submitted Successfully
+              {/* Token Number */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-sm text-center">
+                <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                  activeOrder.paymentStatus === 'PAID' 
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}>
+                  {activeOrder.paymentStatus === 'PAID' ? 'Order Paid via UPI' : 'Pay Cash at Counter'}
                 </span>
                 <h2 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mt-2.5">
                   TOKEN #{activeOrder.tokenNumber}
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  Show this token at the counter or wait for paper to exit the tray!
+                  {activeOrder.paymentStatus === 'PAID'
+                    ? 'Your document is auto-printing now. Wait for paper to exit the tray!'
+                    : 'Please pay cash to the shopkeeper at the counter to release your print!'}
                 </p>
               </div>
 
               {/* Mobile Progress Flow */}
               <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-3 border-t border-slate-100">
-                <div className="text-center p-2 sm:p-3 rounded-xl bg-emerald-50 border border-emerald-200">
-                  <span className="text-[9px] font-bold text-emerald-700 block">STEP 1</span>
-                  <span className="text-[11px] sm:text-xs font-bold text-emerald-900 leading-tight block mt-0.5">Received & Paid</span>
+                <div className={`text-center p-2 sm:p-3 rounded-xl border ${
+                  activeOrder.paymentStatus === 'PAID' 
+                    ? 'bg-emerald-50 border-emerald-200' 
+                    : 'bg-amber-50 border-amber-200'
+                }`}>
+                  <span className="text-[9px] font-bold text-slate-600 block">STEP 1</span>
+                  <span className={`text-[11px] sm:text-xs font-bold leading-tight block mt-0.5 ${
+                    activeOrder.paymentStatus === 'PAID' ? 'text-emerald-900' : 'text-amber-900'
+                  }`}>
+                    {activeOrder.paymentStatus === 'PAID' ? 'Paid via UPI' : 'Pay at Counter'}
+                  </span>
                 </div>
                 <div className={`text-center p-2 sm:p-3 rounded-xl border ${
                   activeOrder.printStatus === 'PRINTING' 
@@ -491,7 +506,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 }`}>
                   <span className="text-[9px] font-bold text-slate-500 block">STEP 2</span>
                   <span className="text-[11px] sm:text-xs font-bold text-slate-800 leading-tight block mt-0.5">
-                    {activeOrder.printStatus === 'PRINTING' ? 'Printing...' : 'Printing'}
+                    {activeOrder.printStatus === 'PRINTING' ? 'Printing...' : activeOrder.printStatus === 'PRINTED' ? 'Printed' : 'Waiting for Shop'}
                   </span>
                 </div>
                 <div className={`text-center p-2 sm:p-3 rounded-xl border ${
@@ -1586,7 +1601,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 ) : (
                   <>
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Confirm UPI Payment Done</span>
+                    <span>Confirm UPI Payment Done (Auto-Prints)</span>
                   </>
                 )}
               </button>
@@ -1595,9 +1610,10 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 type="button"
                 disabled={isUploading}
                 onClick={() => handlePlaceOrder('CASH')}
-                className="w-full rounded-2xl border border-slate-200 py-3 text-xs font-bold text-slate-600 active:bg-slate-100 transition"
+                className="w-full flex items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 py-3 text-xs font-bold text-slate-700 active:bg-slate-100 transition disabled:opacity-60 shadow-2xs"
               >
-                Pay Cash at Counter Instead
+                <IndianRupee className="h-3.5 w-3.5 text-slate-500" />
+                <span>Pay Cash at Counter (Shopkeeper will click Print)</span>
               </button>
             </div>
           </div>
