@@ -78,30 +78,35 @@ class _LoginScreenState extends State<LoginScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Brand Icon
+                    // Brand Logo
                     Center(
                       child: Container(
-                        width: 68,
-                        height: 68,
+                        width: 72,
+                        height: 72,
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF4F46E5), Color(0xFF3730A3)],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(22),
+                          borderRadius: BorderRadius.circular(20),
                           boxShadow: [
                             BoxShadow(
-                              color: const Color(0xFF4F46E5).withValues(alpha: 0.35),
+                              color: const Color(0xFF4F46E5).withValues(alpha: 0.25),
                               blurRadius: 16,
-                              offset: const Offset(0, 8),
+                              offset: const Offset(0, 6),
                             ),
                           ],
                         ),
-                        child: const Icon(
-                          Icons.print_rounded,
-                          color: Colors.white,
-                          size: 34,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(20),
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: const Color(0xFF4F46E5),
+                              child: const Icon(
+                                Icons.print_rounded,
+                                color: Colors.white,
+                                size: 34,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),

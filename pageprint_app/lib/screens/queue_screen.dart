@@ -200,9 +200,22 @@ class _QueueScreenState extends State<QueueScreen> {
             return Scaffold(
               backgroundColor: const Color(0xFFF8FAFC),
               appBar: AppBar(
-                backgroundColor: Colors.white,
-                elevation: 0,
-                titleSpacing: 16,
+                leadingWidth: 52,
+                leading: Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 10, bottom: 10),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, _, _) => const Icon(
+                        Icons.print_rounded,
+                        color: Color(0xFF4F46E5),
+                      ),
+                    ),
+                  ),
+                ),
+                titleSpacing: 12,
                 title: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

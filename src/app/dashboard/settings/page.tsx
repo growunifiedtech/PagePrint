@@ -241,37 +241,6 @@ export default function MerchantSettingsPage() {
                 </div>
               </div>
 
-              {/* Auto-Print Security Control */}
-              <div className="border-t border-slate-100 pt-4">
-                <div className="flex items-start justify-between gap-4 p-4 rounded-xl border border-slate-200 bg-slate-50/70">
-                  <div className="space-y-1">
-                    <span className="text-xs font-bold text-slate-900 block">
-                      Auto-Print Silently on UPI Confirmation
-                    </span>
-                    <p className="text-[11px] text-slate-500 leading-normal">
-                      {shop.autoPrintOnUpi ? (
-                        <span className="text-emerald-700 font-medium">
-                          ⚡ Enabled: Printer immediately starts when customer clicks "Confirm UPI".
-                        </span>
-                      ) : (
-                        <span className="text-indigo-700 font-medium">
-                          🛡️ Verification Mode (Safe): Orders arrive in queue with customer's UTR number. You click "Print Now" after hearing your Soundbox announcement.
-                        </span>
-                      )}
-                    </p>
-                  </div>
-
-                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
-                    <input
-                      type="checkbox"
-                      checked={shop.autoPrintOnUpi}
-                      onChange={(e) => setShop({ ...shop, autoPrintOnUpi: e.target.checked })}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                  </label>
-                </div>
-              </div>
             </div>
 
             {/* 2. Custom Rate Card */}
