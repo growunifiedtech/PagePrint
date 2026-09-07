@@ -1,12 +1,15 @@
 @echo off
 title PagePrint Desktop Agent
 echo ========================================================
-echo        Starting PagePrint Desktop Agent
+echo        Starting PagePrint Desktop Background Agent
 echo ========================================================
 cd /d "%~dp0"
 if exist "PagePrint.exe" (
-    "PagePrint.exe"
+    start "" "PagePrint.exe"
 ) else (
-    node agent\index.js
+    start "" node index.js
 )
-pause
+echo [OK] PagePrint Agent is now running in the background.
+echo Check your dashboard at http://localhost:3000/dashboard
+timeout /t 3 >nul
+exit

@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# agent temp & node_modules
+agent/node_modules/
+agent/temp/
+temp/
+*SumatraPDF-settings.txt

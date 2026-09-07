@@ -198,35 +198,80 @@ async function syncPrintersToCloud(printers) {
   }
 }
 
-// 3. Silent Print PDF via Windows Spooler
+// 3. Silent Print PDF via Windows Spooler (SumatraPDF engine with PowerShell fallback)
 async function printJob(order, filePath, printerName) {
   return new Promise((resolve) => {
     const copies = Math.max(1, order.copies || 1);
     const target = printerName && printerName !== 'Default' ? printerName : 'Windows Default Printer';
-    console.log(`🖨️ [SPOOLER] Spooling "${order.fileName}" -> "${target}" (${copies} ${copies === 1 ? 'copy' : 'copies'}, ${order.isDuplex ? 'Duplex' : 'Single'})...`);
+    console.log(`🖨️ [SPOOLER] Spooling "${order.fileName}" -> "${target}" (${copies} ${copies === 1 ? 'copy' : 'copies'}, ${order.isDuplex ? 'Duplex' : 'Single'}, ${order.colorMode || 'BW'})...`);
 
-    const safeFilePath = filePath.replace(/'/g, "''");
-    const psCommand = (!printerName || printerName === 'Default')
-      ? `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb Print -PassThru | Wait-Process -Timeout 15 }"`
-      : `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb PrintTo -ArgumentList '${printerName.replace(/'/g, "''")}' -PassThru | Wait-Process -Timeout 15 }"`;
-    
-    exec(psCommand, (err) => {
-      if (err) {
-        console.warn('   ⚠️ Print command notice:', err.message);
-      } else {
-        console.log(`   ✓ Successfully handed off ${copies} ${copies === 1 ? 'copy' : 'copies'} to Windows Spooler`);
-      }
+    // Check for bundled SumatraPDF binary (Zero install, native Windows silent printing)
+    const sumatraExe = path.join(baseDir, 'SumatraPDF.exe');
+    const sumatraNodeModules = path.join(baseDir, 'node_modules', 'pdf-to-printer', 'dist', 'SumatraPDF-3.4.6-32.exe');
+    const sumatraPath = fs.existsSync(sumatraExe) ? sumatraExe : (fs.existsSync(sumatraNodeModules) ? sumatraNodeModules : null);
 
-      // Privacy Cleanup: Immediately wipe local temporary file
+    const cleanupAndResolve = () => {
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
           console.log('   🔒 Local temporary file permanently wiped for privacy.');
         }
       } catch (e) {}
-
       resolve(true);
-    });
+    };
+
+    if (sumatraPath) {
+      const printSettings = [];
+      if (copies > 1) printSettings.push(`${copies}x`);
+      if (order.isDuplex) {
+        printSettings.push('duplexlong');
+      } else {
+        printSettings.push('simplex');
+      }
+      if (order.colorMode === 'COLOR') {
+        printSettings.push('color');
+      } else {
+        printSettings.push('monochrome');
+      }
+      if (order.paperSize) {
+        printSettings.push(`paper=${order.paperSize}`);
+      }
+
+      const settingsArg = printSettings.length > 0 ? `-print-settings "${printSettings.join(',')}"` : '';
+      const printerArg = (printerName && printerName !== 'Default')
+        ? `-print-to "${printerName}"`
+        : `-print-to-default`;
+
+      const sumatraCmd = `"${sumatraPath}" ${printerArg} -silent ${settingsArg} "${filePath}"`;
+
+      exec(sumatraCmd, (err) => {
+        if (err) {
+          console.warn('   ⚠️ SumatraPDF notice, trying PowerShell fallback:', err.message);
+          runPowerShell();
+        } else {
+          console.log(`   ✓ Successfully spooled ${copies} ${copies === 1 ? 'copy' : 'copies'} via SumatraPDF engine!`);
+          cleanupAndResolve();
+        }
+      });
+    } else {
+      runPowerShell();
+    }
+
+    function runPowerShell() {
+      const safeFilePath = filePath.replace(/'/g, "''");
+      const psCommand = (!printerName || printerName === 'Default')
+        ? `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb Print -PassThru | Wait-Process -Timeout 15 }"`
+        : `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb PrintTo -ArgumentList '${printerName.replace(/'/g, "''")}' -PassThru | Wait-Process -Timeout 15 }"`;
+
+      exec(psCommand, (err) => {
+        if (err) {
+          console.warn('   ⚠️ Print command notice:', err.message);
+        } else {
+          console.log(`   ✓ Successfully handed off ${copies} ${copies === 1 ? 'copy' : 'copies'} to Windows Spooler`);
+        }
+        cleanupAndResolve();
+      });
+    }
   });
 }
 

@@ -373,29 +373,87 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       let backFileDownloadUrl = '';
       let backUploadedPublicId = '';
 
-      // Prepare file to upload (if multiple files selected, merge into 1 PDF with layout)
+      // Prepare file to upload (synthesize into standard printable PDF with exact layout, paper size & orientation)
       let primaryUploadFile = file || selectedFiles[0];
-      if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
-        try {
-          setUploadProgress(15);
-          const { PDFDocument } = await import('pdf-lib');
-          const mergedPdf = await PDFDocument.create();
+      try {
+        setUploadProgress(15);
+        const { PDFDocument } = await import('pdf-lib');
+        const mergedPdf = await PDFDocument.create();
 
-          // Standard paper sizes in points (72 points / inch; 1 mm = 72 / 25.4 pt ≈ 2.83465 pt)
-          const paperDimensionsPt: Record<PaperSize, { width: number; height: number }> = {
-            A4: { width: 595.28, height: 841.89 },
-            LEGAL: { width: 612.28, height: 1009.13 },
-            A3: { width: 841.89, height: 1190.55 },
-            A5: { width: 419.53, height: 595.28 },
-            PHOTO_4X6: { width: 283.46, height: 425.20 },
-            LETTER: { width: 612.28, height: 790.87 },
-            B5: { width: 498.90, height: 708.66 },
-          };
+        // Standard paper sizes in points (72 points / inch; 1 mm = 72 / 25.4 pt ≈ 2.83465 pt)
+        const paperDimensionsPt: Record<PaperSize, { width: number; height: number }> = {
+          A4: { width: 595.28, height: 841.89 },
+          LEGAL: { width: 612.28, height: 1009.13 },
+          A3: { width: 841.89, height: 1190.55 },
+          A5: { width: 419.53, height: 595.28 },
+          PHOTO_4X6: { width: 283.46, height: 425.20 },
+          LETTER: { width: 612.28, height: 790.87 },
+          B5: { width: 498.90, height: 708.66 },
+        };
 
-          const baseDim = paperDimensionsPt[paperSize] || paperDimensionsPt.A4;
-          const sheetWidth = orientation === 'PORTRAIT' ? baseDim.width : baseDim.height;
-          const sheetHeight = orientation === 'PORTRAIT' ? baseDim.height : baseDim.width;
+        const baseDim = paperDimensionsPt[paperSize] || paperDimensionsPt.A4;
+        const sheetWidth = orientation === 'PORTRAIT' ? baseDim.width : baseDim.height;
+        const sheetHeight = orientation === 'PORTRAIT' ? baseDim.height : baseDim.width;
 
+        const embedImageSafe = async (f: File) => {
+          const buffer = await f.arrayBuffer();
+          if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
+            return await mergedPdf.embedJpg(buffer);
+          } else {
+            return await mergedPdf.embedPng(buffer);
+          }
+        };
+
+        if (uploadMode === 'ID_DOUBLE_SIDED' && file && backFile) {
+          // ID Card / Passbook 2-Sided Synthesis
+          const frontImg = file.type.startsWith('image/') ? await embedImageSafe(file) : null;
+          const backImg = backFile.type.startsWith('image/') ? await embedImageSafe(backFile) : null;
+
+          if (idLayoutMode === 'SAME_SIDE') {
+            // Front & Back on top and bottom halves of a single sheet
+            const sheet = mergedPdf.addPage([sheetWidth, sheetHeight]);
+            const halfH = sheetHeight / 2;
+            const cardMaxW = Math.min(sheetWidth * 0.75, 340);
+            const cardMaxH = Math.min(halfH * 0.75, 215);
+
+            if (frontImg) {
+              const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
+              const w = frontImg.width * s;
+              const h = frontImg.height * s;
+              sheet.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: halfH + (halfH - h) / 2, width: w, height: h });
+            }
+            if (backImg) {
+              const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
+              const w = backImg.width * s;
+              const h = backImg.height * s;
+              sheet.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (halfH - h) / 2, width: w, height: h });
+            }
+          } else {
+            // DUPLEX: Front on Page 1, Back on Page 2
+            const cardMaxW = Math.min(sheetWidth * 0.8, 380);
+            const cardMaxH = Math.min(sheetHeight * 0.8, 240);
+
+            const page1 = mergedPdf.addPage([sheetWidth, sheetHeight]);
+            if (frontImg) {
+              const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
+              const w = frontImg.width * s;
+              const h = frontImg.height * s;
+              page1.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
+            }
+
+            const page2 = mergedPdf.addPage([sheetWidth, sheetHeight]);
+            if (backImg) {
+              const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
+              const w = backImg.width * s;
+              const h = backImg.height * s;
+              page2.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
+            }
+          }
+
+          const mergedBytes = await mergedPdf.save();
+          primaryUploadFile = new File([mergedBytes as any], `ID_Card_${idLayoutMode}.pdf`, { type: 'application/pdf' });
+
+        } else if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
           if (pagesPerSheet === 1) {
             // 1-on-1: Append each file as a full sheet
             for (const f of selectedFiles) {
@@ -405,13 +463,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
                 copiedPages.forEach(p => mergedPdf.addPage(p));
               } else if (f.type.startsWith('image/')) {
-                const buffer = await f.arrayBuffer();
-                let img;
-                if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
-                  img = await mergedPdf.embedJpg(buffer);
-                } else {
-                  img = await mergedPdf.embedPng(buffer);
-                }
+                const img = await embedImageSafe(f);
                 const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
                 const margin = 18;
                 const availW = sheetWidth - (margin * 2);
@@ -461,13 +513,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
 
                 try {
                   if (f.type.startsWith('image/')) {
-                    const buffer = await f.arrayBuffer();
-                    let img;
-                    if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
-                      img = await mergedPdf.embedJpg(buffer);
-                    } else {
-                      img = await mergedPdf.embedPng(buffer);
-                    }
+                    const img = await embedImageSafe(f);
                     const s = (paperFitting === 'FILL'
                       ? Math.max(slotW / img.width, slotH / img.height)
                       : Math.min(slotW / img.width, slotH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
@@ -498,10 +544,43 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
 
           const mergedBytes = await mergedPdf.save();
           primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files_${pagesPerSheet}Up.pdf`, { type: 'application/pdf' });
-        } catch (mergeErr) {
-          console.warn('PDF merge fallback to first file:', mergeErr);
-          primaryUploadFile = selectedFiles[0];
+        } else if (uploadMode === 'SINGLE' && selectedFiles.length === 1) {
+          const singleF = selectedFiles[0];
+          if (singleF.type.startsWith('image/')) {
+            // Embed single image cleanly into paper-sized PDF
+            const img = await embedImageSafe(singleF);
+            const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
+            const margin = 18;
+            const availW = sheetWidth - (margin * 2);
+            const availH = sheetHeight - (margin * 2);
+            const s = (paperFitting === 'FILL'
+              ? Math.max(availW / img.width, availH / img.height)
+              : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+            const drawW = img.width * s;
+            const drawH = img.height * s;
+            const drawX = margin + (availW - drawW) / 2;
+            const drawY = margin + (availH - drawH) / 2;
+            page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
+            const mergedBytes = await mergedPdf.save();
+            primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Print.pdf`, { type: 'application/pdf' });
+          } else if ((singleF.type === 'application/pdf' || singleF.name.toLowerCase().endsWith('.pdf')) && pageSelectionType === 'custom' && customPageRange.trim()) {
+            // Trim single PDF to custom selected pages
+            const buffer = await singleF.arrayBuffer();
+            const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+            const totalP = doc.getPageCount();
+            const chosen = parsePageRange(customPageRange, totalP);
+            const zeroIndexed = chosen.map(p => p - 1).filter(idx => idx >= 0 && idx < totalP);
+            if (zeroIndexed.length > 0) {
+              const copiedPages = await mergedPdf.copyPages(doc, zeroIndexed);
+              copiedPages.forEach(p => mergedPdf.addPage(p));
+              const mergedBytes = await mergedPdf.save();
+              primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Pages_${customPageRange.replace(/[^a-zA-Z0-9-]/g, '_')}.pdf`, { type: 'application/pdf' });
+            }
+          }
         }
+      } catch (mergeErr) {
+        console.warn('PDF synthesis notice:', mergeErr);
+        primaryUploadFile = file || selectedFiles[0];
       }
 
       // 1. Upload Front / Primary Document
