@@ -7,7 +7,8 @@ import {
   Upload, FileText, CheckCircle2, Clock, AlertCircle, 
   Layers, Palette, Copy, FileCheck, ArrowRight, ShieldCheck, 
   Sparkles, RefreshCw, QrCode, MapPin, IndianRupee, Printer, ExternalLink,
-  Eye, RotateCw, CreditCard, BookOpen, ChevronLeft, ChevronRight, ScrollText, Smartphone, User
+  Eye, RotateCw, CreditCard, BookOpen, ChevronLeft, ChevronRight, ScrollText, Smartphone, User,
+  LayoutGrid, Sliders, Maximize2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { 
@@ -123,6 +124,12 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   const [pageSelectionType, setPageSelectionType] = useState<'all' | 'custom'>('all');
   const [customPageRange, setCustomPageRange] = useState('');
 
+  // Multi-up Layout & Paper Fitting States
+  const [pagesPerSheet, setPagesPerSheet] = useState<1 | 2 | 4 | 6>(1);
+  const [paperFitting, setPaperFitting] = useState<'FIT' | 'FILL' | 'CUSTOM'>('FIT');
+  const [printScale, setPrintScale] = useState<number>(100);
+  const [previewSheetIndex, setPreviewSheetIndex] = useState<number>(0);
+
   // Payment & Order Placement States
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
@@ -226,6 +233,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       setPageSelectionType('all');
     }
     setPreviewPageIndex(0);
+    setPreviewSheetIndex(0);
   };
 
   const handleSwitchActiveFile = (index: number) => {
@@ -278,15 +286,23 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     if (uploadMode === 'ID_DOUBLE_SIDED') {
       return idLayoutMode === 'SAME_SIDE' ? 1 : 2;
     }
-    // If multiple files are chosen, custom range is disabled (all pages are printed)
+    // If multiple files are chosen, sheets required = ceil(files / pagesPerSheet)
     if (selectedFiles.length > 1) {
-      return pageCount;
+      return Math.max(1, Math.ceil(selectedFiles.length / pagesPerSheet));
     }
     if (pageSelectionType === 'custom' && customPageRange.trim()) {
       return parsedCustomPages.length > 0 ? parsedCustomPages.length : pageCount;
     }
     return pageCount;
   })();
+
+  const totalSheets = uploadMode === 'ID_DOUBLE_SIDED'
+    ? (idLayoutMode === 'SAME_SIDE' ? 1 : 2)
+    : selectedFiles.length > 1
+    ? Math.max(1, Math.ceil(selectedFiles.length / pagesPerSheet))
+    : (pageSelectionType === 'custom' && parsedCustomPages.length > 0 ? parsedCustomPages.length : pageCount);
+
+  const sheetsSaved = selectedFiles.length > 1 ? Math.max(0, selectedFiles.length - effectivePageCount) : 0;
 
   const currentPaperSpec = PAPER_SPECS[paperSize] || PAPER_SPECS.A4;
   const isPortrait = orientation === 'PORTRAIT';
@@ -357,33 +373,131 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       let backFileDownloadUrl = '';
       let backUploadedPublicId = '';
 
-      // Prepare file to upload (if multiple files selected, merge into 1 PDF)
+      // Prepare file to upload (if multiple files selected, merge into 1 PDF with layout)
       let primaryUploadFile = file || selectedFiles[0];
       if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
         try {
           setUploadProgress(15);
           const { PDFDocument } = await import('pdf-lib');
           const mergedPdf = await PDFDocument.create();
-          for (const f of selectedFiles) {
-            if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-              const buffer = await f.arrayBuffer();
-              const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-              const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
-              copiedPages.forEach(p => mergedPdf.addPage(p));
-            } else if (f.type.startsWith('image/')) {
-              const buffer = await f.arrayBuffer();
-              let img;
-              if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
-                img = await mergedPdf.embedJpg(buffer);
-              } else {
-                img = await mergedPdf.embedPng(buffer);
+
+          // Standard paper sizes in points (72 points / inch; 1 mm = 72 / 25.4 pt ≈ 2.83465 pt)
+          const paperDimensionsPt: Record<PaperSize, { width: number; height: number }> = {
+            A4: { width: 595.28, height: 841.89 },
+            LEGAL: { width: 612.28, height: 1009.13 },
+            A3: { width: 841.89, height: 1190.55 },
+            A5: { width: 419.53, height: 595.28 },
+            PHOTO_4X6: { width: 283.46, height: 425.20 },
+            LETTER: { width: 612.28, height: 790.87 },
+            B5: { width: 498.90, height: 708.66 },
+          };
+
+          const baseDim = paperDimensionsPt[paperSize] || paperDimensionsPt.A4;
+          const sheetWidth = orientation === 'PORTRAIT' ? baseDim.width : baseDim.height;
+          const sheetHeight = orientation === 'PORTRAIT' ? baseDim.height : baseDim.width;
+
+          if (pagesPerSheet === 1) {
+            // 1-on-1: Append each file as a full sheet
+            for (const f of selectedFiles) {
+              if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+                const buffer = await f.arrayBuffer();
+                const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+                const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
+                copiedPages.forEach(p => mergedPdf.addPage(p));
+              } else if (f.type.startsWith('image/')) {
+                const buffer = await f.arrayBuffer();
+                let img;
+                if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
+                  img = await mergedPdf.embedJpg(buffer);
+                } else {
+                  img = await mergedPdf.embedPng(buffer);
+                }
+                const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
+                const margin = 18;
+                const availW = sheetWidth - (margin * 2);
+                const availH = sheetHeight - (margin * 2);
+                const s = (paperFitting === 'FILL'
+                  ? Math.max(availW / img.width, availH / img.height)
+                  : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                const drawW = img.width * s;
+                const drawH = img.height * s;
+                const drawX = margin + (availW - drawW) / 2;
+                const drawY = margin + (availH - drawH) / 2;
+                page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
               }
-              const page = mergedPdf.addPage([img.width, img.height]);
-              page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+            }
+          } else {
+            // Multi-up grid layout (2, 4, 6 per sheet)
+            const cols = pagesPerSheet === 2 
+              ? (orientation === 'LANDSCAPE' ? 2 : 1) 
+              : pagesPerSheet === 4 
+              ? 2 
+              : (orientation === 'LANDSCAPE' ? 3 : 2);
+            const rows = pagesPerSheet === 2 
+              ? (orientation === 'LANDSCAPE' ? 1 : 2) 
+              : pagesPerSheet === 4 
+              ? 2 
+              : (orientation === 'LANDSCAPE' ? 2 : 3);
+
+            const margin = 18;
+            const gap = 12;
+            const totalGapX = gap * (cols - 1);
+            const totalGapY = gap * (rows - 1);
+            const slotW = (sheetWidth - (margin * 2) - totalGapX) / cols;
+            const slotH = (sheetHeight - (margin * 2) - totalGapY) / rows;
+
+            for (let i = 0; i < selectedFiles.length; i += pagesPerSheet) {
+              const chunk = selectedFiles.slice(i, i + pagesPerSheet);
+              const sheetPage = mergedPdf.addPage([sheetWidth, sheetHeight]);
+
+              for (let cIdx = 0; cIdx < chunk.length; cIdx++) {
+                const f = chunk[cIdx];
+                const col = cIdx % cols;
+                const row = Math.floor(cIdx / cols);
+
+                // Bottom-left origin in PDF:
+                const slotX = margin + col * (slotW + gap);
+                const slotY = sheetHeight - margin - ((row + 1) * slotH) - (row * gap);
+
+                try {
+                  if (f.type.startsWith('image/')) {
+                    const buffer = await f.arrayBuffer();
+                    let img;
+                    if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
+                      img = await mergedPdf.embedJpg(buffer);
+                    } else {
+                      img = await mergedPdf.embedPng(buffer);
+                    }
+                    const s = (paperFitting === 'FILL'
+                      ? Math.max(slotW / img.width, slotH / img.height)
+                      : Math.min(slotW / img.width, slotH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                    const drawW = img.width * s;
+                    const drawH = img.height * s;
+                    const drawX = slotX + (slotW - drawW) / 2;
+                    const drawY = slotY + (slotH - drawH) / 2;
+                    sheetPage.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
+                  } else if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+                    const buffer = await f.arrayBuffer();
+                    const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+                    if (doc.getPageCount() > 0) {
+                      const embeddedPage = await mergedPdf.embedPage(doc.getPages()[0]);
+                      const s = Math.min(slotW / embeddedPage.width, slotH / embeddedPage.height) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                      const drawW = embeddedPage.width * s;
+                      const drawH = embeddedPage.height * s;
+                      const drawX = slotX + (slotW - drawW) / 2;
+                      const drawY = slotY + (slotH - drawH) / 2;
+                      sheetPage.drawPage(embeddedPage, { x: drawX, y: drawY, width: drawW, height: drawH });
+                    }
+                  }
+                } catch (slotErr) {
+                  console.warn('Error placing file in multi-up slot:', f.name, slotErr);
+                }
+              }
             }
           }
+
           const mergedBytes = await mergedPdf.save();
-          primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files.pdf`, { type: 'application/pdf' });
+          primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files_${pagesPerSheet}Up.pdf`, { type: 'application/pdf' });
         } catch (mergeErr) {
           console.warn('PDF merge fallback to first file:', mergeErr);
           primaryUploadFile = selectedFiles[0];
@@ -475,6 +589,9 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         isDuplex: effectiveDuplex,
         paperSize,
         orientation,
+        pagesPerSheet,
+        paperFitting,
+        printScale,
         copies,
         additionalServices: [],
         totalAmountPaise: pricingSummary.grandTotalPaise,
@@ -1085,7 +1202,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
             </div>
 
             {/* 1.5 Live Paper Print Preview Card */}
-            {(file || backFile) && (
+            {(file || backFile || selectedFiles.length > 0) && (
               <div className="rounded-2xl bg-white p-4 sm:p-5 shadow-sm border border-slate-200 space-y-3">
                 {/* Header & Orientation Toggle */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 pb-3">
@@ -1095,12 +1212,18 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                         <Eye className="h-4 w-4 text-indigo-600" />
                         Live Paper Print Preview
                       </span>
+                      {selectedFiles.length > 1 && pagesPerSheet > 1 && (
+                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                          {pagesPerSheet}-on-1 Sheet
+                        </span>
+                      )}
                       <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/60 uppercase">
-                        Scale 1:1
+                        {paperFitting === 'CUSTOM' ? `${printScale}% Scale` : paperFitting === 'FILL' ? 'Fill Sheet' : 'Scale 1:1'}
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
                       {currentPaperSpec.label} ({displayWidthMm} × {displayHeightMm} mm) • {isPortrait ? 'Portrait ↕' : 'Landscape ↔'}
+                      {selectedFiles.length > 1 && ` • Showing Sheet ${previewSheetIndex + 1} of ${totalSheets}`}
                     </p>
                   </div>
 
@@ -1168,7 +1291,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 )}
 
                 {/* The Paper Simulation Stage (Clean & Responsive) */}
-                <div className="relative rounded-2xl bg-gradient-to-b from-slate-100 via-slate-100 to-slate-200/90 border border-slate-200 p-4 sm:p-6 flex flex-col items-center justify-center min-h-[340px] sm:min-h-[400px] overflow-hidden shadow-inner">
+                <div className="relative rounded-2xl bg-gradient-to-b from-slate-100 via-slate-100 to-slate-200/90 border border-slate-200 p-3 sm:p-6 flex flex-col items-center justify-center min-h-[340px] sm:min-h-[420px] overflow-hidden shadow-inner">
                   {/* Cutting Mat Subtle Grid */}
                   <div
                     className="absolute inset-0 opacity-[0.06] pointer-events-none"
@@ -1194,9 +1317,9 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     style={{
                       aspectRatio: `${paperAspectRatio}`,
                       width: isPortrait 
-                        ? (paperSize === 'LEGAL' ? 'min(235px, 68vw)' : paperSize === 'PHOTO_4X6' ? 'min(200px, 60vw)' : 'min(265px, 72vw)') 
-                        : (paperSize === 'A3' ? 'min(380px, 88vw)' : paperSize === 'LEGAL' ? 'min(360px, 86vw)' : 'min(340px, 84vw)'),
-                      maxWidth: '92%',
+                        ? (paperSize === 'LEGAL' ? 'min(240px, 68vw)' : paperSize === 'PHOTO_4X6' ? 'min(200px, 60vw)' : 'min(270px, 74vw)') 
+                        : (paperSize === 'A3' ? 'min(460px, 94vw)' : paperSize === 'LEGAL' ? 'min(440px, 92vw)' : 'min(400px, 90vw)'),
+                      maxWidth: isPortrait ? '320px' : '520px',
                       filter: colorMode === 'BW' ? 'grayscale(100%) contrast(1.12)' : 'none',
                     }}
                     className="bg-white rounded-xs shadow-[0_20px_45px_rgba(15,23,42,0.16),0_4px_10px_rgba(15,23,42,0.06)] border border-slate-300 relative transition-all duration-300 flex flex-col justify-between overflow-hidden select-none"
@@ -1214,7 +1337,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     </div>
 
                     {/* Paper Content Rendering */}
-                    <div className="w-full h-full relative z-10 flex flex-col items-center justify-center p-2 bg-white overflow-hidden">
+                    <div className="w-full h-full relative z-10 flex flex-col items-center justify-center p-2 sm:p-2.5 bg-white overflow-hidden">
                       {uploadMode === 'ID_DOUBLE_SIDED' ? (
                         /* ID CARD / PASSBOOK PREVIEW */
                         idLayoutMode === 'SAME_SIDE' ? (
@@ -1280,6 +1403,69 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                             )}
                           </div>
                         )
+                      ) : selectedFiles.length > 1 ? (
+                        /* MULTI-FILE GRID RENDERING (1-up, 2-up, 4-up, 6-up) */
+                        <div className={`w-full h-full p-1.5 ${
+                          pagesPerSheet === 1 
+                            ? 'flex items-center justify-center'
+                            : pagesPerSheet === 2
+                            ? (!isPortrait ? 'grid grid-cols-2 gap-2' : 'grid grid-rows-2 gap-2')
+                            : pagesPerSheet === 4
+                            ? 'grid grid-cols-2 grid-rows-2 gap-1.5'
+                            : (!isPortrait ? 'grid grid-cols-3 grid-rows-2 gap-1' : 'grid grid-cols-2 grid-rows-3 gap-1')
+                        }`}>
+                          {Array.from({ length: pagesPerSheet }).map((_, slotIdx) => {
+                            const fileIdx = (previewSheetIndex * pagesPerSheet) + slotIdx;
+                            const currentFile = selectedFiles[fileIdx];
+                            const currentPreview = filePreviews[fileIdx];
+                            const isSlotImg = currentFile && currentFile.type.startsWith('image/');
+                            const isSlotPdf = currentFile && (currentFile.type === 'application/pdf' || currentFile.name.toLowerCase().endsWith('.pdf'));
+
+                            if (!currentFile) {
+                              return (
+                                <div key={slotIdx} className="w-full h-full border border-dashed border-slate-200 rounded-lg flex items-center justify-center bg-slate-50/50 p-2 text-slate-300">
+                                  <span className="text-[9px] font-semibold italic">Empty Slot</span>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div
+                                key={slotIdx}
+                                className="w-full h-full border border-indigo-200/80 rounded-lg flex flex-col items-center justify-center relative bg-indigo-50/15 overflow-hidden p-1 shadow-2xs"
+                              >
+                                <span className="absolute top-1 left-1 bg-slate-900/80 text-white text-[8px] font-bold px-1.5 py-0.2 rounded shadow-xs z-10 truncate max-w-[85%]">
+                                  #{fileIdx + 1}: {currentFile.name}
+                                </span>
+
+                                {isSlotImg && currentPreview ? (
+                                  <div className="w-full h-full flex items-center justify-center overflow-hidden">
+                                    <img
+                                      src={currentPreview}
+                                      alt={currentFile.name}
+                                      style={{
+                                        transform: paperFitting === 'CUSTOM' ? `scale(${printScale / 100})` : 'scale(1)',
+                                        transition: 'transform 0.15s ease'
+                                      }}
+                                      className={`w-full h-full ${paperFitting === 'FILL' ? 'object-cover' : 'object-contain'} rounded-xs pointer-events-none select-none`}
+                                    />
+                                  </div>
+                                ) : isSlotPdf ? (
+                                  <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center">
+                                    <FileText className="h-6 w-6 sm:h-7 sm:w-7 text-indigo-500 mb-1" />
+                                    <span className="text-[10px] font-bold text-slate-800 line-clamp-1 max-w-[120px]">{currentFile.name}</span>
+                                    <span className="text-[8px] text-slate-400 font-semibold mt-0.5">PDF • {filePageCounts[fileIdx] || 1}p</span>
+                                  </div>
+                                ) : (
+                                  <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center">
+                                    <FileText className="h-6 w-6 text-slate-400 mb-1" />
+                                    <span className="text-[10px] font-bold text-slate-700 line-clamp-1 max-w-[120px]">{currentFile.name}</span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       ) : (
                         /* STANDARD SINGLE DOCUMENT PREVIEW */
                         previewSide === 'back' && effectiveDuplex ? (
@@ -1299,7 +1485,11 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                             <img
                               src={previewUrl}
                               alt="Document Preview"
-                              className="w-full h-full object-contain pointer-events-none select-none rounded-xs"
+                              style={{
+                                transform: paperFitting === 'CUSTOM' ? `scale(${printScale / 100})` : 'scale(1)',
+                                transition: 'transform 0.15s ease'
+                              }}
+                              className={`w-full h-full ${paperFitting === 'FILL' ? 'object-cover' : 'object-contain'} pointer-events-none select-none rounded-xs`}
                             />
                           </div>
                         ) : previewFileType === 'pdf' && previewUrl ? (
@@ -1342,9 +1532,54 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-gradient-to-tl from-slate-200 to-transparent pointer-events-none"></div>
                   </div>
 
-                  <div className="mt-3 text-center">
+                  {/* Multi-Sheet Navigator under simulated paper */}
+                  {selectedFiles.length > 1 && totalSheets > 1 && (
+                    <div className="mt-3 flex items-center justify-between gap-2 w-full max-w-sm px-1">
+                      <button
+                        type="button"
+                        disabled={previewSheetIndex <= 0}
+                        onClick={() => setPreviewSheetIndex(prev => Math.max(0, prev - 1))}
+                        className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-xs disabled:opacity-35 disabled:cursor-not-allowed shadow-2xs hover:bg-slate-50 active:scale-95 transition"
+                      >
+                        ◀ Prev
+                      </button>
+
+                      <div className="flex items-center gap-1 overflow-x-auto py-0.5 no-scrollbar max-w-[170px]">
+                        {Array.from({ length: totalSheets }).map((_, sIdx) => (
+                          <button
+                            key={sIdx}
+                            type="button"
+                            onClick={() => setPreviewSheetIndex(sIdx)}
+                            className={`h-7 min-w-[32px] px-2 rounded-lg text-xs font-bold transition shrink-0 ${
+                              previewSheetIndex === sIdx
+                                ? 'bg-indigo-600 text-white shadow-xs'
+                                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {sIdx + 1}
+                          </button>
+                        ))}
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={previewSheetIndex >= totalSheets - 1}
+                        onClick={() => setPreviewSheetIndex(prev => Math.min(totalSheets - 1, prev + 1))}
+                        className="px-3 py-1.5 rounded-xl bg-white border border-slate-300 text-slate-700 font-bold text-xs disabled:opacity-35 disabled:cursor-not-allowed shadow-2xs hover:bg-slate-50 active:scale-95 transition"
+                      >
+                        Next ▶
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mt-2.5 text-center">
                     <span className="text-[10px] sm:text-[11px] text-slate-500 font-medium">
                       Simulated Sheet: <strong className="text-slate-800">{currentPaperSpec.label}</strong> ({displayWidthMm} × {displayHeightMm} mm)
+                      {selectedFiles.length > 1 && pagesPerSheet > 1 && (
+                        <span className="ml-1 text-indigo-600 font-bold">
+                          • {pagesPerSheet}-Up Layout
+                        </span>
+                      )}
                     </span>
                   </div>
                 </div>
@@ -1352,7 +1587,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
             )}
 
             {/* 1.6 OUTSIDE OF PRINT PREVIEW - BIG MOBILE SCROLL & PAGE CONTROLLER */}
-            {uploadMode === 'SINGLE' && file && activePagesList.length > 1 && (
+            {uploadMode === 'SINGLE' && selectedFiles.length <= 1 && file && activePagesList.length > 1 && (
               <div className="rounded-2xl bg-white p-4 sm:p-5 shadow-sm border-2 border-indigo-200/80 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -1515,6 +1750,150 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                   </button>
                 </div>
               </div>
+
+              {/* Print Layout & Multi-Up Sheet Fitting (Standard & Multi-file) */}
+              {uploadMode === 'SINGLE' && (
+                <div className="pt-2 border-t border-slate-100 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                        <LayoutGrid className="h-4 w-4 text-indigo-600" />
+                        Print Layout (Files per Sheet)
+                      </span>
+                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200/50">
+                        {pagesPerSheet === 1 ? '1 per Sheet' : `${pagesPerSheet}-on-1 Sheet`}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { count: 1 as const, label: '1 on 1 Sheet', desc: 'Full page standard', sub: '1 file/sheet' },
+                        { count: 2 as const, label: '2 on 1 Sheet', desc: !isPortrait ? 'Side-by-side ↔' : 'Stacked ↕', sub: '2 files/sheet' },
+                        { count: 4 as const, label: '4 on 1 Sheet', desc: '2×2 Grid', sub: '4 files/sheet' },
+                        { count: 6 as const, label: '6 on 1 Sheet', desc: !isPortrait ? '3×2 Grid' : '2×3 Grid', sub: '6 files/sheet' },
+                      ].map((item) => (
+                        <button
+                          key={item.count}
+                          type="button"
+                          onClick={() => {
+                            setPagesPerSheet(item.count);
+                            setPreviewSheetIndex(0);
+                          }}
+                          className={`p-3 rounded-2xl border text-left transition active:scale-[0.98] ${
+                            pagesPerSheet === item.count
+                              ? 'border-indigo-600 bg-indigo-50/90 text-indigo-950 font-bold ring-2 ring-indigo-600/20 shadow-xs'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold block leading-tight">{item.label}</span>
+                            <span className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded ${
+                              pagesPerSheet === item.count ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {item.count}x
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 block mt-0.5">{item.desc}</span>
+                          <span className="text-[9px] font-semibold text-indigo-600 block mt-1">
+                            {item.sub}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Paper Savings Callout */}
+                    {selectedFiles.length > 1 && sheetsSaved > 0 && (
+                      <div className="flex items-center gap-2 rounded-xl bg-emerald-50 p-2.5 text-xs text-emerald-800 border border-emerald-200 mt-2.5">
+                        <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
+                        <span>
+                          <strong>Paper & Cost Saving:</strong> {selectedFiles.length} files fitted into {effectivePageCount} {effectivePageCount === 1 ? 'sheet' : 'sheets'}! You save {sheetsSaved} {sheetsSaved === 1 ? 'sheet' : 'sheets'} of paper (₹{((sheetsSaved * shop.pricing.bwSinglePaise) / 100).toFixed(2)} saved).
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Paper Fitting & Sizing Adjustments */}
+                  <div className="pt-2 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-semibold text-slate-600 flex items-center gap-1.5">
+                        <Sliders className="h-3.5 w-3.5 text-indigo-600" />
+                        Paper Fitting & Sizing
+                      </span>
+                      <span className="text-[11px] font-bold text-indigo-600">
+                        {paperFitting === 'FIT' ? 'Fit to Paper (No Crop)' : paperFitting === 'FILL' ? 'Fill Sheet (Borderless)' : `Scale ${printScale}%`}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'FIT' as const, label: 'Fit to Page', desc: 'No crop • Full view' },
+                        { id: 'FILL' as const, label: 'Fill Sheet', desc: 'Edge-to-edge' },
+                        { id: 'CUSTOM' as const, label: 'Custom Scale', desc: `${printScale}% size` },
+                      ].map((fit) => (
+                        <button
+                          key={fit.id}
+                          type="button"
+                          onClick={() => setPaperFitting(fit.id)}
+                          className={`p-2.5 rounded-2xl border text-center transition active:scale-[0.98] ${
+                            paperFitting === fit.id
+                              ? 'border-indigo-600 bg-indigo-50/90 text-indigo-950 font-bold ring-2 ring-indigo-600/20'
+                              : 'border-slate-200 bg-white text-slate-700'
+                          }`}
+                        >
+                          <span className="block text-xs font-bold leading-tight">{fit.label}</span>
+                          <span className="text-[10px] text-slate-400 block mt-0.5">{fit.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Custom Scale Slider & Quick Preset Pills */}
+                    {paperFitting === 'CUSTOM' && (
+                      <div className="mt-3 p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-700">Adjust Scale Percentage</span>
+                          <span className="font-mono font-black text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-indigo-200 shadow-2xs">
+                            {printScale}%
+                          </span>
+                        </div>
+
+                        <input
+                          type="range"
+                          min="40"
+                          max="120"
+                          step="5"
+                          value={printScale}
+                          onChange={(e) => setPrintScale(parseInt(e.target.value, 10))}
+                          className="w-full accent-indigo-600 cursor-pointer"
+                        />
+
+                        {/* Quick Presets for ID Cards & Small Photos */}
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase">Presets:</span>
+                          {[
+                            { label: '50% (ID/Card)', val: 50 },
+                            { label: '75% (Medium)', val: 75 },
+                            { label: '100% (Standard)', val: 100 },
+                            { label: '115% (Fill)', val: 115 },
+                          ].map((p) => (
+                            <button
+                              key={p.val}
+                              type="button"
+                              onClick={() => setPrintScale(p.val)}
+                              className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
+                                printScale === p.val
+                                  ? 'bg-indigo-600 text-white shadow-2xs'
+                                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                              }`}
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Sides (Duplex) - Standard Docs Only */}
               {uploadMode === 'SINGLE' && (

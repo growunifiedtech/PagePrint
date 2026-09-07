@@ -73,6 +73,9 @@ export interface Order {
   isDuplex: boolean;
   paperSize: PaperSize;
   orientation?: Orientation;
+  pagesPerSheet?: number;
+  paperFitting?: string;
+  printScale?: number;
   uploadMode?: UploadMode;
   idLayoutMode?: IdLayoutMode;
   backFileName?: string;

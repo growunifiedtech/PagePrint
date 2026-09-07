@@ -528,6 +528,16 @@ export default function MerchantDashboardPage() {
                             Front + Back ({order.idLayoutMode === 'SAME_SIDE' ? 'Same-Side' : 'Duplex'})
                           </span>
                         )}
+                        {order.pagesPerSheet && order.pagesPerSheet > 1 && (
+                          <span className="text-[11px] font-bold bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full border border-purple-200">
+                            Layout: {order.pagesPerSheet}-on-1 Sheet ({order.orientation === 'LANDSCAPE' ? 'Landscape ↔' : 'Portrait ↕'})
+                          </span>
+                        )}
+                        {order.paperFitting && (
+                          <span className="text-[11px] font-medium bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
+                            {order.paperFitting === 'FIT' ? 'Fit to Page' : order.paperFitting === 'FILL' ? 'Fill Sheet' : `Scale: ${order.printScale || 100}%`}
+                          </span>
+                        )}
                         {order.selectedPages && order.selectedPages !== 'ALL' && (
                           <span className="text-[11px] font-mono font-semibold bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-full">
                             Pages: {order.selectedPages}
