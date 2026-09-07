@@ -21,13 +21,11 @@ class SettingsSheet extends StatefulWidget {
 }
 
 class _SettingsSheetState extends State<SettingsSheet> {
-  late bool _autoPrint;
   late bool _isMuted;
 
   @override
   void initState() {
     super.initState();
-    _autoPrint = widget.shop.autoPrintOnUpi;
     _isMuted = AudioService.instance.isMuted;
   }
 
@@ -106,24 +104,50 @@ class _SettingsSheetState extends State<SettingsSheet> {
           const Divider(height: 1, thickness: 1, color: Color(0xFFF1F5F9)),
           const SizedBox(height: 16),
 
-          // Quick Controls: Auto-Print on UPI
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'Auto-Print on UPI',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          // Manual Print Security Guarantee
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0FDF4),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFBBF7D0)),
             ),
-            subtitle: Text(
-              'Instantly send job to Windows Spooler upon UPI payment',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            child: const Row(
+              children: [
+                Icon(
+                  Icons.shield_outlined,
+                  color: Color(0xFF16A34A),
+                  size: 22,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '100% Manual 1-Tap Control',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                          color: Color(0xFF14532D),
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Printers will never print on their own. You must tap "Verify & Print" for every job.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF15803D),
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            value: _autoPrint,
-            activeTrackColor: const Color(0xFF4F46E5),
-            onChanged: (val) {
-              setState(() => _autoPrint = val);
-              widget.firestoreService.toggleAutoPrint(widget.shop.id, val);
-            },
           ),
+          const SizedBox(height: 16),
 
           // Soundbox Chime Alert Toggle
           SwitchListTile.adaptive(

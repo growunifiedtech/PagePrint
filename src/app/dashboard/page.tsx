@@ -201,11 +201,6 @@ export default function MerchantDashboardPage() {
     }
   };
 
-  const toggleAutoPrint = async () => {
-    const newVal = !shop.autoPrintOnUpi;
-    setShop({ ...shop, autoPrintOnUpi: newVal });
-    await updateShopInCloud(shop.id, { autoPrintOnUpi: newVal });
-  };
 
   const handleLogout = async () => {
     await logoutUser();
@@ -248,18 +243,11 @@ export default function MerchantDashboardPage() {
 
           {/* Quick Toolbar */}
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* Auto-Print Toggle */}
-            <button
-              onClick={toggleAutoPrint}
-              className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition-all border ${
-                shop.autoPrintOnUpi
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-emerald-500/20'
-                  : 'bg-slate-100 text-slate-600 border-slate-300'
-              }`}
-            >
-              <Power className={`h-3.5 w-3.5 ${shop.autoPrintOnUpi ? 'text-emerald-600' : 'text-slate-400'}`} />
-              <span>Auto-Print on UPI: {shop.autoPrintOnUpi ? 'ON' : 'OFF'}</span>
-            </button>
+            {/* Manual 1-Tap Print Guarantee */}
+            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold bg-slate-100 text-slate-700 border border-slate-300">
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+              <span>Manual 1-Tap Print Active</span>
+            </div>
 
             {/* Test Sound */}
             <button
