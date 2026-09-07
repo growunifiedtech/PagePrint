@@ -13,7 +13,7 @@ import {
 import confetti from 'canvas-confetti';
 import { 
   getShopBySlugFromCloud, createOrderInCloud, subscribeToSingleOrderRealtime, 
-  uploadDocumentToStorage, subscribeToShopOrdersRealtime 
+  uploadDocumentToStorage, subscribeToShopOrdersRealtime, deleteOrderFromCloud 
 } from '@/lib/firebase';
 import { calculateOrderPrice } from '@/lib/store';
 import { playNewOrderChime } from '@/lib/sound';
@@ -713,6 +713,64 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     }
   };
 
+  const handleResetUploadState = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+    filePreviews.forEach(p => URL.revokeObjectURL(p));
+    setPreviewUrl(null);
+    setBackPreviewUrl(null);
+    setFile(null);
+    setSelectedFiles([]);
+    setActiveOrder(null);
+    setUploadProgress(0);
+  };
+
+  // Cancel current interrupted order and reset to start fresh
+  const handleCancelAndStartNewPrint = async () => {
+    if (!activeOrder) {
+      handleResetUploadState();
+      return;
+    }
+
+    // Race condition guard: if shopkeeper already clicked Resume Print and it's printing
+    if (activeOrder.printStatus === 'PRINTING') {
+      alert('The shopkeeper has already resumed your print! Your document is currently printing on the counter printer.');
+      return;
+    }
+
+    try {
+      // 1. Delete old files from Cloudinary / storage
+      await fetch('/api/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          publicId: activeOrder.publicId,
+          fileUrl: activeOrder.fileUrl,
+          orderId: activeOrder.id
+        })
+      }).catch(() => {});
+
+      if (activeOrder.backPublicId || activeOrder.backFileUrl) {
+        await fetch('/api/upload/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            publicId: activeOrder.backPublicId,
+            fileUrl: activeOrder.backFileUrl,
+            orderId: activeOrder.id + '_back'
+          })
+        }).catch(() => {});
+      }
+
+      // 2. Remove order from Firestore so it instantly vanishes from shop dashboard
+      await deleteOrderFromCloud(activeOrder.id);
+    } catch (e) {
+      console.warn('Error cancelling old order:', e);
+    }
+
+    handleResetUploadState();
+  };
+
   const cleanUpiId = (shop.upiId || '9876543210@paytm').trim();
   const cleanShopName = (shop.name || 'Print Shop').trim();
   const formattedGrandTotal = pricingSummary.grandTotalRupees.toFixed(2);
@@ -887,16 +945,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                             If you cannot wait, you can upload again. (Interrupted order auto-cancels in 10 mins).
                           </p>
                           <button
-                            onClick={() => {
-                              if (previewUrl) URL.revokeObjectURL(previewUrl);
-                              if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
-                              filePreviews.forEach(p => URL.revokeObjectURL(p));
-                              setPreviewUrl(null);
-                              setBackPreviewUrl(null);
-                              setFile(null);
-                              setSelectedFiles([]);
-                              setActiveOrder(null);
-                            }}
+                            onClick={handleCancelAndStartNewPrint}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-xs transition active:scale-95"
                           >
                             <RefreshCw className="h-3 w-3" />
