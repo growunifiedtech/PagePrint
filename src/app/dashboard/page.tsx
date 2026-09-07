@@ -100,7 +100,7 @@ export default function MerchantDashboardPage() {
     );
   }
 
-  // Real action handlers with instant privacy auto-deletion
+  // Real action handlers: Shopkeeper verifies payment and accepts print
   const handlePrintOrder = async (order: Order) => {
     await updateOrderStatusInCloud(order.id, { 
       printStatus: 'PRINTING',
@@ -108,37 +108,14 @@ export default function MerchantDashboardPage() {
     });
     playNewOrderChime();
     
-    // Auto-mark printed and trigger instant privacy deletion
+    // Fallback timer: If desktop agent is not connected, auto-complete after 45 seconds
     setTimeout(async () => {
-      await updateOrderStatusInCloud(order.id, { printStatus: 'PRINTED' });
-      playNewOrderChime();
-
-      // Trigger instant deletion from Cloudinary / local storage within 3 seconds of printing
       try {
-        await fetch('/api/upload/delete', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            publicId: order.publicId,
-            fileUrl: order.fileUrl,
-            orderId: order.id
-          })
-        });
-        if (order.backPublicId || order.backFileUrl) {
-          await fetch('/api/upload/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              publicId: order.backPublicId,
-              fileUrl: order.backFileUrl,
-              orderId: order.id + '_back'
-            })
-          });
-        }
+        await updateOrderStatusInCloud(order.id, { printStatus: 'PRINTED' });
       } catch (e) {
-        console.warn('Auto-delete error:', e);
+        console.warn('Fallback status update error:', e);
       }
-    }, 3000);
+    }, 45000);
   };
 
   const handleMarkCompleted = async (order: Order) => {
@@ -575,12 +552,18 @@ export default function MerchantDashboardPage() {
                       <span className="text-base font-black text-slate-900 block">
                         ₹{(order.totalAmountPaise / 100).toFixed(2)}
                       </span>
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
                         order.paymentStatus === 'PAID'
                           ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                          : 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : order.paymentStatus === 'PENDING'
+                          ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 animate-pulse'
+                          : 'bg-amber-50 text-amber-800 border border-amber-200'
                       }`}>
-                        {order.paymentStatus === 'PAID' ? '✓ Paid via UPI' : 'Cash at Counter'}
+                        {order.paymentStatus === 'PAID' 
+                          ? '✓ Verified & Paid' 
+                          : order.paymentStatus === 'PENDING' 
+                          ? '📢 UPI Check Required' 
+                          : '💵 Cash at Counter'}
                       </span>
                       {order.paymentId && (
                         <span className="block text-[9px] font-mono text-slate-500 mt-0.5 max-w-[130px] truncate" title={order.paymentId}>
@@ -593,13 +576,25 @@ export default function MerchantDashboardPage() {
                     <div className="flex items-center gap-2">
                       {order.printStatus === 'QUEUED' && (
                         <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-                          <button
-                            onClick={() => handlePrintOrder(order)}
-                            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
-                          >
-                            <Check className="h-3.5 w-3.5" />
-                            <span>Accept & Print</span>
-                          </button>
+                          {order.paymentStatus === 'PENDING' ? (
+                            <button
+                              onClick={() => handlePrintOrder(order)}
+                              className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
+                              title="Verify payment on soundbox / UPI app and accept print"
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              <span>Verify UPI & Print</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handlePrintOrder(order)}
+                              className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
+                              title="Collect cash at counter and accept print"
+                            >
+                              <IndianRupee className="h-3.5 w-3.5" />
+                              <span>Collect Cash & Print</span>
+                            </button>
+                          )}
 
                           <button
                             onClick={() => handleRejectOrder(order)}
@@ -612,9 +607,19 @@ export default function MerchantDashboardPage() {
                       )}
 
                       {order.printStatus === 'PRINTING' && (
-                        <div className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-3.5 py-2 text-xs font-bold text-amber-800 animate-pulse">
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-600" />
-                          <span>Printing...</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 rounded-xl bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs font-bold text-amber-800 animate-pulse">
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin text-amber-600" />
+                            <span>Printing...</span>
+                          </div>
+                          <button
+                            onClick={() => handleMarkCompleted(order)}
+                            title="Mark print completed and ready for customer pickup"
+                            className="flex items-center gap-1 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-1.5 text-xs font-bold transition shadow-2xs active:scale-95"
+                          >
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                            <span>Done ✓</span>
+                          </button>
                         </div>
                       )}
 

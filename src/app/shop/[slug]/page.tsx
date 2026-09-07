@@ -595,9 +595,9 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         copies,
         additionalServices: [],
         totalAmountPaise: pricingSummary.grandTotalPaise,
-        paymentStatus: paymentType === 'UPI' ? 'PAID' : 'CASH_AT_COUNTER',
+        paymentStatus: paymentType === 'UPI' ? 'PENDING' : 'CASH_AT_COUNTER',
         paymentId: paymentType === 'UPI' ? `UPI_${Date.now()}` : `CASH_${Date.now()}`,
-        printStatus: shop.autoPrintOnUpi && paymentType === 'UPI' ? 'PRINTING' : 'QUEUED',
+        printStatus: 'QUEUED',
         targetPrinterName: colorMode === 'COLOR' 
           ? shop.activePrinters?.find(p => p.supportsColor)?.name || 'Color Printer' 
           : shop.activePrinters?.find(p => !p.supportsColor)?.name || 'Laser B&W',
@@ -733,22 +733,22 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
 
                   {/* Status Pill */}
                   <div>
-                    <span className={`text-[11px] font-black uppercase tracking-wider px-3.5 py-1 rounded-full border ${
+                    <span className={`text-[11px] font-black uppercase tracking-wider px-3.5 py-1.5 rounded-full border ${
                       isPrinted
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                         : isCurrentlyPrinting
                         ? 'bg-indigo-50 text-indigo-700 border-indigo-300 animate-pulse'
-                        : activeOrder.paymentStatus === 'PAID'
-                        ? 'bg-blue-50 text-blue-700 border-blue-200'
-                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                        : activeOrder.paymentStatus === 'PENDING'
+                        ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse'
+                        : 'bg-indigo-50 text-indigo-900 border-indigo-200'
                     }`}>
                       {isPrinted
                         ? '✓ Document Printed & Ready for Pickup'
                         : isCurrentlyPrinting
-                        ? '⚡ Printing in Progress on Counter Printer'
-                        : activeOrder.paymentStatus === 'PAID'
-                        ? '✓ UPI Paid — Waiting for Shopkeeper to Accept'
-                        : '⏳ Pay Cash at Counter to Print'}
+                        ? '⚡ Payment Accepted — Printing in Progress...'
+                        : activeOrder.paymentStatus === 'PENDING'
+                        ? '⏳ Waiting for Shopkeeper to Verify Payment & Accept'
+                        : '💵 Pay Cash at Counter — Shopkeeper will Accept & Print'}
                     </span>
                   </div>
 
@@ -775,6 +775,37 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                       </span>
                     </div>
 
+                    {/* Live Verification Notice */}
+                    <div className="p-3 rounded-2xl bg-white/95 border border-indigo-100 text-xs text-slate-700 text-center space-y-1">
+                      {isPrinted ? (
+                        <p className="font-bold text-emerald-700">
+                          🎉 Your document is printed! Please collect it from the counter.
+                        </p>
+                      ) : isCurrentlyPrinting ? (
+                        <p className="font-bold text-indigo-700 animate-pulse">
+                          ⚡ Shopkeeper verified payment and accepted your order! Printing now on the counter printer.
+                        </p>
+                      ) : activeOrder.paymentStatus === 'PENDING' ? (
+                        <div className="space-y-1">
+                          <p className="font-bold text-amber-900">
+                            📢 UPI Payment Submitted (₹{(activeOrder.totalAmountPaise / 100).toFixed(2)})
+                          </p>
+                          <p className="text-[11px] text-slate-600">
+                            The shopkeeper is checking their UPI soundbox / app. Your print will start automatically once accepted!
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <p className="font-bold text-slate-900">
+                            💵 Cash Payment at Counter: ₹{(activeOrder.totalAmountPaise / 100).toFixed(2)}
+                          </p>
+                          <p className="text-[11px] text-slate-600">
+                            Please show <strong>Token #{activeOrder.tokenNumber}</strong> and pay cash. The shopkeeper will accept and print immediately.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
                     <div className="pt-2 text-xs text-slate-600 flex items-center justify-center gap-2 flex-wrap">
                       <span>Customer: <strong className="text-slate-900">{activeOrder.customerName || 'Customer'}</strong></span>
                       <span>•</span>
@@ -785,15 +816,15 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                   {/* Mobile 3-Step Flow */}
                   <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-2 border-t border-slate-100">
                     <div className={`text-center p-2 sm:p-2.5 rounded-xl border ${
-                      activeOrder.paymentStatus === 'PAID' 
+                      activeOrder.paymentStatus === 'PAID' || activeOrder.paymentStatus === 'PENDING'
                         ? 'bg-emerald-50 border-emerald-200' 
                         : 'bg-amber-50 border-amber-200'
                     }`}>
                       <span className="text-[9px] font-bold text-slate-500 block">STEP 1</span>
                       <span className={`text-[11px] font-bold leading-tight block mt-0.5 ${
-                        activeOrder.paymentStatus === 'PAID' ? 'text-emerald-800' : 'text-amber-800'
+                        activeOrder.paymentStatus === 'CASH_AT_COUNTER' ? 'text-amber-800' : 'text-emerald-800'
                       }`}>
-                        {activeOrder.paymentStatus === 'PAID' ? 'Paid via UPI' : 'Pay Cash'}
+                        {activeOrder.paymentStatus === 'CASH_AT_COUNTER' ? 'Pay Cash' : 'UPI Sent'}
                       </span>
                     </div>
                     <div className={`text-center p-2 sm:p-2.5 rounded-xl border ${
@@ -801,11 +832,11 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                         ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-400/20' 
                         : isPrinted 
                         ? 'bg-emerald-50 border-emerald-200' 
-                        : 'bg-slate-50 border-slate-200'
+                        : 'bg-amber-50 border-amber-300 animate-pulse'
                     }`}>
                       <span className="text-[9px] font-bold text-slate-500 block">STEP 2</span>
                       <span className={`text-[11px] font-bold leading-tight block mt-0.5 ${
-                        isCurrentlyPrinting ? 'text-indigo-800' : isPrinted ? 'text-emerald-800' : 'text-slate-600'
+                        isCurrentlyPrinting ? 'text-indigo-800 font-black' : isPrinted ? 'text-emerald-800 font-bold' : 'text-amber-800 font-bold'
                       }`}>
                         {isCurrentlyPrinting ? 'Printing...' : isPrinted ? 'Printed' : 'Shop Approval'}
                       </span>
@@ -2264,14 +2295,19 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 type="button"
                 disabled={isUploading}
                 onClick={() => handlePlaceOrder('UPI')}
-                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3.5 text-sm font-bold text-white shadow-md transition active:scale-95 disabled:opacity-60"
+                className="w-full flex flex-col items-center justify-center gap-0.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3.5 px-4 text-white shadow-md transition active:scale-95 disabled:opacity-60"
               >
                 {isUploading ? (
-                  <span>Uploading File ({uploadProgress}%)...</span>
+                  <span className="text-sm font-bold">Uploading File ({uploadProgress}%)...</span>
                 ) : (
                   <>
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>I Have Paid — Get My Print Token</span>
+                    <div className="flex items-center gap-1.5 text-sm font-black">
+                      <CheckCircle2 className="h-4 w-4 shrink-0" />
+                      <span>I Have Paid via UPI — Submit for Verification</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-100 font-medium">
+                      Shopkeeper checks soundbox / UPI app & accepts print
+                    </span>
                   </>
                 )}
               </button>
@@ -2280,10 +2316,15 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 type="button"
                 disabled={isUploading}
                 onClick={() => handlePlaceOrder('CASH')}
-                className="w-full flex items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 py-3 text-xs font-bold text-slate-700 active:bg-slate-100 transition disabled:opacity-60 shadow-2xs"
+                className="w-full flex flex-col items-center justify-center gap-0.5 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 py-3 px-4 text-slate-700 active:bg-slate-100 transition disabled:opacity-60 shadow-2xs"
               >
-                <IndianRupee className="h-3.5 w-3.5 text-slate-500" />
-                <span>Pay Cash at Counter (Shopkeeper will Accept & Print)</span>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800">
+                  <IndianRupee className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+                  <span>Pay Cash at Counter</span>
+                </div>
+                <span className="text-[10px] text-slate-400 font-medium">
+                  Pay ₹{formattedGrandTotal} at the counter • Shopkeeper accepts & prints
+                </span>
               </button>
             </div>
           </div>
