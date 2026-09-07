@@ -15,8 +15,12 @@ const https = require('https');
 const http = require('http');
 const readline = require('readline');
 
-// Load or initialize config
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+// Determine runtime directory (supports PagePrint.exe and node index.js)
+const baseDir = (process.execPath && process.execPath.toLowerCase().endsWith('pageprint.exe'))
+  ? path.dirname(process.execPath)
+  : __dirname;
+
+const CONFIG_FILE = path.join(baseDir, 'config.json');
 let savedConfig = {};
 if (fs.existsSync(CONFIG_FILE)) {
   try {
@@ -28,7 +32,7 @@ const CONFIG = {
   shopSlug: process.env.PAGEPRINT_SHOP_SLUG || savedConfig.shopSlug || '',
   serverUrl: process.env.PAGEPRINT_SERVER_URL || savedConfig.serverUrl || 'https://pageprint.in',
   pollIntervalMs: 3000,
-  tempDir: path.join(__dirname, 'temp')
+  tempDir: path.join(baseDir, 'temp')
 };
 
 if (!fs.existsSync(CONFIG.tempDir)) {
@@ -44,19 +48,31 @@ function promptShopSlug() {
       input: process.stdin,
       output: process.stdout
     });
-    console.log('\n----------------------------------------------------');
+    console.log('\n====================================================');
     console.log(' FIRST-TIME SETUP: Please enter your Shop Slug');
-    console.log(' (Found on your dashboard URL: e.g. "krishna-xerox")');
-    console.log('----------------------------------------------------');
-    rl.question('Shop Slug: ', (answer) => {
-      rl.close();
-      const slug = answer.trim() || 'krishna-xerox';
+    console.log(' (Found on your dashboard: e.g. "krishna-xerox")');
+    console.log('====================================================');
+    rl.question('Enter Shop Slug: ', (slugAns) => {
+      const slug = slugAns.trim() || 'krishna-xerox';
       CONFIG.shopSlug = slug;
-      try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify({ shopSlug: slug, serverUrl: CONFIG.serverUrl }, null, 2));
-        console.log(`Saved to ${CONFIG_FILE}\n`);
-      } catch (err) {}
-      resolve(slug);
+      
+      console.log('\nServer Environment:');
+      console.log(' 1. Cloud Production (https://pageprint.in) [Default]');
+      console.log(' 2. Localhost Test   (http://localhost:3000)');
+      rl.question('Choose Server [1 or 2, default 1]: ', (srvAns) => {
+        rl.close();
+        if (srvAns.trim() === '2') {
+          CONFIG.serverUrl = 'http://localhost:3000';
+        } else {
+          CONFIG.serverUrl = 'https://pageprint.in';
+        }
+
+        try {
+          fs.writeFileSync(CONFIG_FILE, JSON.stringify({ shopSlug: slug, serverUrl: CONFIG.serverUrl }, null, 2));
+          console.log(`\n✅ Saved configuration to ${CONFIG_FILE}\n`);
+        } catch (err) {}
+        resolve(slug);
+      });
     });
   });
 }
@@ -185,24 +201,27 @@ async function syncPrintersToCloud(printers) {
 // 3. Silent Print PDF via Windows Spooler
 async function printJob(order, filePath, printerName) {
   return new Promise((resolve) => {
-    console.log(`🖨️ [SPOOLER] Printing "${order.fileName}" to printer: "${printerName}"...`);
-    console.log(`   Specs: Copies: ${order.copies || 1}, Duplex: ${order.isDuplex ? 'Double-Sided' : 'Single'}`);
+    const copies = Math.max(1, order.copies || 1);
+    const target = printerName && printerName !== 'Default' ? printerName : 'Windows Default Printer';
+    console.log(`🖨️ [SPOOLER] Spooling "${order.fileName}" -> "${target}" (${copies} ${copies === 1 ? 'copy' : 'copies'}, ${order.isDuplex ? 'Duplex' : 'Single'})...`);
 
-    // In Windows, PowerShell Start-Process PrintTo prints directly without dialogs
-    const psCommand = `powershell -Command "Start-Process -FilePath '${filePath.replace(/'/g, "''")}' -Verb PrintTo -ArgumentList '${printerName.replace(/'/g, "''")}' -PassThru | Wait-Process -Timeout 15"`;
+    const safeFilePath = filePath.replace(/'/g, "''");
+    const psCommand = (!printerName || printerName === 'Default')
+      ? `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb Print -PassThru | Wait-Process -Timeout 15 }"`
+      : `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb PrintTo -ArgumentList '${printerName.replace(/'/g, "''")}' -PassThru | Wait-Process -Timeout 15 }"`;
     
     exec(psCommand, (err) => {
       if (err) {
-        console.warn('Print command status:', err.message);
+        console.warn('   ⚠️ Print command notice:', err.message);
       } else {
-        console.log('   ✓ Handed off to Windows Print Spooler (SUCCESS)');
+        console.log(`   ✓ Successfully handed off ${copies} ${copies === 1 ? 'copy' : 'copies'} to Windows Spooler`);
       }
 
       // Privacy Cleanup: Immediately wipe local temporary file
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log('   🔒 Local temporary file permanently wiped.');
+          console.log('   🔒 Local temporary file permanently wiped for privacy.');
         }
       } catch (e) {}
 
