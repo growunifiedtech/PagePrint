@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
-  getFirestore, collection, doc, setDoc, updateDoc, onSnapshot, 
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, 
   query, where, orderBy, getDocs, getDoc, limit, serverTimestamp 
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
@@ -132,6 +132,18 @@ export async function syncOrderToCloud(order: Order): Promise<void> {
     await setDoc(orderRef, { ...cleanData, updatedAt: new Date().toISOString() }, { merge: true });
   } catch (error) {
     console.error('Error syncing order to cloud:', error);
+  }
+}
+
+/**
+ * Delete an order from Cloud Firestore (for shopkeeper reject / cancel)
+ */
+export async function deleteOrderFromCloud(orderId: string): Promise<void> {
+  try {
+    const orderRef = doc(db, 'orders', orderId);
+    await deleteDoc(orderRef);
+  } catch (error) {
+    console.error('Error deleting order from cloud:', error);
   }
 }
 

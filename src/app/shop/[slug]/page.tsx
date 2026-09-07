@@ -7,12 +7,12 @@ import {
   Upload, FileText, CheckCircle2, Clock, AlertCircle, 
   Layers, Palette, Copy, FileCheck, ArrowRight, ShieldCheck, 
   Sparkles, RefreshCw, QrCode, MapPin, IndianRupee, Printer, ExternalLink,
-  Eye, RotateCw, CreditCard, BookOpen, ChevronLeft, ChevronRight, ScrollText, Smartphone
+  Eye, RotateCw, CreditCard, BookOpen, ChevronLeft, ChevronRight, ScrollText, Smartphone, User
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { 
   getShopBySlugFromCloud, createOrderInCloud, subscribeToSingleOrderRealtime, 
-  uploadDocumentToStorage 
+  uploadDocumentToStorage, subscribeToShopOrdersRealtime 
 } from '@/lib/firebase';
 import { calculateOrderPrice } from '@/lib/store';
 import { playNewOrderChime } from '@/lib/sound';
@@ -83,7 +83,11 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   const [uploadMode, setUploadMode] = useState<UploadMode>('SINGLE');
   const [idLayoutMode, setIdLayoutMode] = useState<IdLayoutMode>('SAME_SIDE');
 
-  // Primary / Front File States
+  // Primary / Front File States (Supports Multiple Files)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [activeFileIndex, setActiveFileIndex] = useState(0);
+  const [filePageCounts, setFilePageCounts] = useState<number[]>([]);
+  const [filePreviews, setFilePreviews] = useState<string[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState('');
   const [fileSizeStr, setFileSizeStr] = useState('');
@@ -91,6 +95,10 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   const [isParsingPdf, setIsParsingPdf] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewFileType, setPreviewFileType] = useState<'pdf' | 'image' | 'other'>('other');
+
+  // Customer Pickup Identification
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
 
   // Back File States (For ID Card / Passbook 2-sided upload)
   const [backFile, setBackFile] = useState<File | null>(null);
@@ -114,12 +122,12 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   const [copies, setCopies] = useState(1);
   const [pageSelectionType, setPageSelectionType] = useState<'all' | 'custom'>('all');
   const [customPageRange, setCustomPageRange] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
 
   // Payment & Order Placement States
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
-  const [upiUtr, setUpiUtr] = useState('');
+  const [shopQueueOrders, setShopQueueOrders] = useState<Order[]>([]);
+  const [copiedUpi, setCopiedUpi] = useState(false);
 
   // Load shop from Firestore
   useEffect(() => {
@@ -131,6 +139,16 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     }
     loadShop();
   }, [slug]);
+
+  // Real-time queue listener to calculate live queue position
+  useEffect(() => {
+    if (!shop?.id) return;
+    const unsubscribe = subscribeToShopOrdersRealtime(shop.id, (allOrders) => {
+      const activeQueue = allOrders.filter(o => o.printStatus === 'QUEUED' || o.printStatus === 'PRINTING');
+      setShopQueueOrders(activeQueue);
+    });
+    return () => unsubscribe();
+  }, [shop?.id]);
 
   // Cleanup preview object URLs
   useEffect(() => {
@@ -151,40 +169,81 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     return () => unsubscribe();
   }, [activeOrder?.id]);
 
-  // Handle Primary / Front file selection
-  const handleFileSelection = async (selectedFile: File) => {
-    setFile(selectedFile);
-    setFileName(selectedFile.name);
-    setFileSizeStr((selectedFile.size / (1024 * 1024)).toFixed(2) + ' MB');
+  // Handle Multiple File Selection (Single mode now supports selecting multiple files)
+  const handleMultipleFilesSelection = async (fileList: FileList | File[]) => {
+    const incoming = Array.from(fileList);
+    if (!incoming.length) return;
 
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    const objUrl = URL.createObjectURL(selectedFile);
-    setPreviewUrl(objUrl);
+    setSelectedFiles(incoming);
+    setActiveFileIndex(0);
 
-    const isPdf = selectedFile.type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf');
-    const isImg = selectedFile.type.startsWith('image/');
+    const primary = incoming[0];
+    setFile(primary);
+    setFileName(incoming.length === 1 ? primary.name : `${incoming.length} Files (${primary.name} + ${incoming.length - 1} more)`);
+
+    const totalBytes = incoming.reduce((acc, f) => acc + f.size, 0);
+    setFileSizeStr((totalBytes / (1024 * 1024)).toFixed(2) + ' MB');
+
+    // Revoke old previews
+    filePreviews.forEach(p => URL.revokeObjectURL(p));
+    const newPreviews = incoming.map(f => URL.createObjectURL(f));
+    setFilePreviews(newPreviews);
+    setPreviewUrl(newPreviews[0]);
+
+    const isPdf = primary.type === 'application/pdf' || primary.name.toLowerCase().endsWith('.pdf');
+    const isImg = primary.type.startsWith('image/');
     setPreviewFileType(isPdf ? 'pdf' : isImg ? 'image' : 'other');
 
-    if (isPdf) {
-      setIsParsingPdf(true);
-      try {
-        const { PDFDocument } = await import('pdf-lib');
-        const arrayBuffer = await selectedFile.arrayBuffer();
-        const pdfDoc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-        const count = pdfDoc.getPageCount();
-        setPageCount(count > 0 ? count : 1);
-      } catch (err) {
-        console.warn('PDF-lib fallback to 1 page:', err);
-        setPageCount(1);
-      } finally {
-        setIsParsingPdf(false);
+    setIsParsingPdf(true);
+    try {
+      const { PDFDocument } = await import('pdf-lib');
+      const counts: number[] = [];
+      for (const f of incoming) {
+        if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+          try {
+            const buffer = await f.arrayBuffer();
+            const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+            counts.push(Math.max(1, doc.getPageCount()));
+          } catch {
+            counts.push(1);
+          }
+        } else {
+          counts.push(1);
+        }
       }
-    } else {
-      setPageCount(1);
+      setFilePageCounts(counts);
+      const total = counts.reduce((a, b) => a + b, 0);
+      setPageCount(total);
+    } catch (err) {
+      console.warn('Page count error:', err);
+      setFilePageCounts(incoming.map(() => 1));
+      setPageCount(incoming.length);
+    } finally {
+      setIsParsingPdf(false);
+    }
+
+    if (incoming.length > 1) {
+      setPageSelectionType('all');
     }
     setPreviewPageIndex(0);
+  };
+
+  const handleSwitchActiveFile = (index: number) => {
+    if (!selectedFiles[index]) return;
+    setActiveFileIndex(index);
+    const targetFile = selectedFiles[index];
+    setFile(targetFile);
+    if (filePreviews[index]) {
+      setPreviewUrl(filePreviews[index]);
+    }
+    const isPdf = targetFile.type === 'application/pdf' || targetFile.name.toLowerCase().endsWith('.pdf');
+    const isImg = targetFile.type.startsWith('image/');
+    setPreviewFileType(isPdf ? 'pdf' : isImg ? 'image' : 'other');
+    setPreviewPageIndex(0);
+  };
+
+  const handleFileSelection = (selectedFile: File) => {
+    handleMultipleFilesSelection([selectedFile]);
   };
 
   // Handle Back file selection (ID Card / Passbook)
@@ -218,6 +277,10 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   const effectivePageCount = (() => {
     if (uploadMode === 'ID_DOUBLE_SIDED') {
       return idLayoutMode === 'SAME_SIDE' ? 1 : 2;
+    }
+    // If multiple files are chosen, custom range is disabled (all pages are printed)
+    if (selectedFiles.length > 1) {
+      return pageCount;
     }
     if (pageSelectionType === 'custom' && customPageRange.trim()) {
       return parsedCustomPages.length > 0 ? parsedCustomPages.length : pageCount;
@@ -285,7 +348,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
 
   // Place Order & Upload Document(s)
   const handlePlaceOrder = async (paymentType: 'UPI' | 'CASH') => {
-    if (!file) return;
+    if (!file && (!selectedFiles || selectedFiles.length === 0)) return;
     setIsUploading(true);
 
     try {
@@ -294,14 +357,47 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       let backFileDownloadUrl = '';
       let backUploadedPublicId = '';
 
+      // Prepare file to upload (if multiple files selected, merge into 1 PDF)
+      let primaryUploadFile = file || selectedFiles[0];
+      if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
+        try {
+          setUploadProgress(15);
+          const { PDFDocument } = await import('pdf-lib');
+          const mergedPdf = await PDFDocument.create();
+          for (const f of selectedFiles) {
+            if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+              const buffer = await f.arrayBuffer();
+              const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+              const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
+              copiedPages.forEach(p => mergedPdf.addPage(p));
+            } else if (f.type.startsWith('image/')) {
+              const buffer = await f.arrayBuffer();
+              let img;
+              if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
+                img = await mergedPdf.embedJpg(buffer);
+              } else {
+                img = await mergedPdf.embedPng(buffer);
+              }
+              const page = mergedPdf.addPage([img.width, img.height]);
+              page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+            }
+          }
+          const mergedBytes = await mergedPdf.save();
+          primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files.pdf`, { type: 'application/pdf' });
+        } catch (mergeErr) {
+          console.warn('PDF merge fallback to first file:', mergeErr);
+          primaryUploadFile = selectedFiles[0];
+        }
+      }
+
       // 1. Upload Front / Primary Document
       try {
         const uploadFormData = new FormData();
-        uploadFormData.append('file', file);
+        uploadFormData.append('file', primaryUploadFile);
         uploadFormData.append('shopId', shop.id);
         uploadFormData.append('orderId', 'ord_' + Date.now());
 
-        setUploadProgress(25);
+        setUploadProgress(40);
         const uploadRes = await fetch('/api/upload', {
           method: 'POST',
           body: uploadFormData
@@ -312,13 +408,13 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
           fileDownloadUrl = uploadData.fileUrl;
           uploadedPublicId = uploadData.publicId || '';
         } else {
-          fileDownloadUrl = await uploadDocumentToStorage(file, shop.id, (percent) => {
+          fileDownloadUrl = await uploadDocumentToStorage(primaryUploadFile, shop.id, (percent) => {
             setUploadProgress(percent);
           });
         }
       } catch (err) {
         console.warn('Front file upload fallback:', err);
-        fileDownloadUrl = URL.createObjectURL(file);
+        fileDownloadUrl = URL.createObjectURL(primaryUploadFile);
       }
 
       // 2. Upload Back File (if in ID mode)
@@ -329,7 +425,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
           backFormData.append('shopId', shop.id);
           backFormData.append('orderId', 'ord_back_' + Date.now());
 
-          setUploadProgress(60);
+          setUploadProgress(70);
           const backRes = await fetch('/api/upload', {
             method: 'POST',
             body: backFormData
@@ -353,20 +449,27 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       const tokenLetter = String.fromCharCode(65 + Math.floor(Math.random() * 26));
       const tokenNumber = `${tokenLetter}-${tokenSuffix}`;
 
+      const finalFileName = uploadMode === 'ID_DOUBLE_SIDED' && backFile
+        ? `${file?.name || 'Front'} + ${backFile.name}`
+        : selectedFiles.length > 1
+        ? `${selectedFiles.length} Files (${selectedFiles[0].name} + ${selectedFiles.length - 1} more)`
+        : (file?.name || 'Document.pdf');
+
       // 4. Save Order in Cloud Firestore
       const orderPayload: any = {
         tokenNumber,
         shopId: shop.id,
         shopSlug: shop.slug,
-        customerPhone: customerPhone || '9876543210',
+        customerName: customerName.trim() || 'Walk-in Customer',
+        customerPhone: customerPhone.trim() || '9876543210',
         uploadMode,
-        fileName: uploadMode === 'ID_DOUBLE_SIDED' && backFile ? `${file.name} + ${backFile.name}` : file.name,
-        fileSizeBytes: file.size + (backFile ? backFile.size : 0),
+        fileName: finalFileName,
+        fileSizeBytes: primaryUploadFile.size + (backFile ? backFile.size : 0),
         fileUrl: fileDownloadUrl,
         pageCount: uploadMode === 'ID_DOUBLE_SIDED' ? (idLayoutMode === 'SAME_SIDE' ? 1 : 2) : pageCount,
         selectedPages: uploadMode === 'ID_DOUBLE_SIDED' 
           ? (idLayoutMode === 'SAME_SIDE' ? 'ID_SAME_SIDE' : 'ID_DUPLEX')
-          : (pageSelectionType === 'all' ? 'ALL' : customPageRange),
+          : (selectedFiles.length > 1 ? 'ALL' : pageSelectionType === 'all' ? 'ALL' : customPageRange),
         effectivePageCount,
         colorMode,
         isDuplex: effectiveDuplex,
@@ -376,7 +479,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         additionalServices: [],
         totalAmountPaise: pricingSummary.grandTotalPaise,
         paymentStatus: paymentType === 'UPI' ? 'PAID' : 'CASH_AT_COUNTER',
-        paymentId: paymentType === 'UPI' ? (upiUtr.trim() ? `UTR: ${upiUtr.trim()}` : `UPI_${Date.now()}`) : `CASH_${Date.now()}`,
+        paymentId: paymentType === 'UPI' ? `UPI_${Date.now()}` : `CASH_${Date.now()}`,
         printStatus: shop.autoPrintOnUpi && paymentType === 'UPI' ? 'PRINTING' : 'QUEUED',
         targetPrinterName: colorMode === 'COLOR' 
           ? shop.activePrinters?.find(p => p.supportsColor)?.name || 'Color Printer' 
@@ -410,8 +513,30 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     }
   };
 
-  const upiPayLink = `upi://pay?pa=${shop.upiId}&pn=${encodeURIComponent(shop.name)}&am=${pricingSummary.grandTotalRupees.toFixed(2)}&cu=INR&tn=${encodeURIComponent(`PagePrint ${shop.slug}`)}`;
-  const upiQrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(upiPayLink)}`;
+  const cleanUpiId = (shop.upiId || '9876543210@paytm').trim();
+  const cleanShopName = (shop.name || 'Print Shop').trim();
+  const formattedGrandTotal = pricingSummary.grandTotalRupees.toFixed(2);
+  const upiPayLink = `upi://pay?pa=${encodeURIComponent(cleanUpiId)}&pn=${encodeURIComponent(cleanShopName)}&am=${formattedGrandTotal}&cu=INR&tn=${encodeURIComponent(`Token_${shop.slug}`)}`;
+
+  const handleCopyUpi = () => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(cleanUpiId);
+      setCopiedUpi(true);
+      setTimeout(() => setCopiedUpi(false), 2000);
+    }
+  };
+
+  const handleInitiateCheckout = () => {
+    if (!customerName.trim()) {
+      alert('Please enter your name below so the shopkeeper can hand you your prints.');
+      return;
+    }
+    if (!customerPhone.trim() || customerPhone.trim().length < 10) {
+      alert('Please enter a valid 10-digit mobile number for order pickup.');
+      return;
+    }
+    setIsCheckingOut(true);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50/70 pb-32 sm:pb-28">
@@ -463,123 +588,182 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       {/* Main Form Content */}
       <main className="mx-auto max-w-3xl px-3.5 py-4 sm:px-6 space-y-4 sm:space-y-6">
         {activeOrder ? (
-          /* Active Order Tracking Screen */
+          /* Active Order Tracking Screen with Real-Time Queue Position & Token */
           <div className="space-y-4 sm:space-y-6">
-            <div className="rounded-3xl bg-white p-5 sm:p-8 shadow-sm border border-slate-200 text-center space-y-4">
-              <div className="inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
-                <CheckCircle2 className="h-7 w-7 sm:h-8 sm:w-8" />
-              </div>
+            {(() => {
+              const activeQueueIndex = shopQueueOrders.findIndex(o => o.id === activeOrder.id);
+              const queuePosition = activeQueueIndex >= 0 ? activeQueueIndex + 1 : 1;
+              const isCurrentlyPrinting = activeOrder.printStatus === 'PRINTING';
+              const isPrinted = activeOrder.printStatus === 'PRINTED';
 
-              {/* Token Number */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-white border border-slate-200 shadow-sm text-center">
-                <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
-                  activeOrder.paymentStatus === 'PAID' 
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                    : 'bg-amber-50 text-amber-800 border border-amber-200'
-                }`}>
-                  {activeOrder.paymentStatus === 'PAID' ? 'Order Paid via UPI' : 'Pay Cash at Counter'}
-                </span>
-                <h2 className="text-3xl sm:text-4xl font-black tracking-tight text-slate-900 mt-2.5">
-                  TOKEN #{activeOrder.tokenNumber}
-                </h2>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  {activeOrder.paymentStatus === 'PAID'
-                    ? 'Your document is auto-printing now. Wait for paper to exit the tray!'
-                    : 'Please pay cash to the shopkeeper at the counter to release your print!'}
-                </p>
-              </div>
-
-              {/* Mobile Progress Flow */}
-              <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-3 border-t border-slate-100">
-                <div className={`text-center p-2 sm:p-3 rounded-xl border ${
-                  activeOrder.paymentStatus === 'PAID' 
-                    ? 'bg-emerald-50 border-emerald-200' 
-                    : 'bg-amber-50 border-amber-200'
-                }`}>
-                  <span className="text-[9px] font-bold text-slate-600 block">STEP 1</span>
-                  <span className={`text-[11px] sm:text-xs font-bold leading-tight block mt-0.5 ${
-                    activeOrder.paymentStatus === 'PAID' ? 'text-emerald-900' : 'text-amber-900'
+              return (
+                <div className="rounded-3xl bg-white p-5 sm:p-8 shadow-sm border border-slate-200 text-center space-y-4">
+                  <div className={`inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full border ${
+                    isPrinted 
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                      : isCurrentlyPrinting 
+                      ? 'bg-indigo-50 text-indigo-600 border-indigo-200 animate-pulse'
+                      : 'bg-amber-50 text-amber-600 border-amber-200'
                   }`}>
-                    {activeOrder.paymentStatus === 'PAID' ? 'Paid via UPI' : 'Pay at Counter'}
-                  </span>
-                </div>
-                <div className={`text-center p-2 sm:p-3 rounded-xl border ${
-                  activeOrder.printStatus === 'PRINTING' 
-                    ? 'bg-amber-50 border-amber-300 animate-pulse' 
-                    : activeOrder.printStatus === 'PRINTED' 
-                    ? 'bg-emerald-50 border-emerald-200' 
-                    : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <span className="text-[9px] font-bold text-slate-500 block">STEP 2</span>
-                  <span className="text-[11px] sm:text-xs font-bold text-slate-800 leading-tight block mt-0.5">
-                    {activeOrder.printStatus === 'PRINTING' ? 'Printing...' : activeOrder.printStatus === 'PRINTED' ? 'Printed' : 'Waiting for Shop'}
-                  </span>
-                </div>
-                <div className={`text-center p-2 sm:p-3 rounded-xl border ${
-                  activeOrder.printStatus === 'PRINTED' 
-                    ? 'bg-emerald-100 border-emerald-300 font-bold text-emerald-900' 
-                    : 'bg-slate-50 border-slate-200 text-slate-400'
-                }`}>
-                  <span className="text-[9px] font-bold block">STEP 3</span>
-                  <span className="text-[11px] sm:text-xs font-bold leading-tight block mt-0.5">Ready for Pickup</span>
-                </div>
-              </div>
+                    {isPrinted ? (
+                      <CheckCircle2 className="h-7 w-7 sm:h-8 sm:w-8" />
+                    ) : isCurrentlyPrinting ? (
+                      <Printer className="h-7 w-7 sm:h-8 sm:w-8 animate-bounce" />
+                    ) : (
+                      <Clock className="h-7 w-7 sm:h-8 sm:w-8 animate-pulse" />
+                    )}
+                  </div>
 
-              {/* Order Summary Specs */}
-              <div className="rounded-2xl bg-slate-50 p-3.5 sm:p-4 text-left text-xs space-y-2 text-slate-600 border border-slate-100">
-                <div className="flex justify-between gap-2">
-                  <span className="text-slate-400">File Name:</span>
-                  <span className="font-bold text-slate-800 truncate max-w-[180px] sm:max-w-[240px]">{activeOrder.fileName}</span>
-                </div>
-                {activeOrder.uploadMode === 'ID_DOUBLE_SIDED' && (
-                  <div className="flex justify-between">
-                    <span className="text-slate-400">Print Style:</span>
-                    <span className="font-bold text-indigo-700">
-                      Front + Back ({activeOrder.idLayoutMode === 'SAME_SIDE' ? 'Both on 1 Sheet' : 'Two-Sided Duplex'})
+                  {/* Status Pill */}
+                  <div>
+                    <span className={`text-[11px] font-black uppercase tracking-wider px-3.5 py-1 rounded-full border ${
+                      isPrinted
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : isCurrentlyPrinting
+                        ? 'bg-indigo-50 text-indigo-700 border-indigo-300 animate-pulse'
+                        : activeOrder.paymentStatus === 'PAID'
+                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}>
+                      {isPrinted
+                        ? '✓ Document Printed & Ready for Pickup'
+                        : isCurrentlyPrinting
+                        ? '⚡ Printing in Progress on Counter Printer'
+                        : activeOrder.paymentStatus === 'PAID'
+                        ? '✓ UPI Paid — Waiting for Shopkeeper to Accept'
+                        : '⏳ Pay Cash at Counter to Print'}
                     </span>
                   </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Print Mode:</span>
-                  <span className="font-semibold text-slate-800">
-                    {activeOrder.colorMode === 'COLOR' ? 'Color' : 'Black & White'} · {activeOrder.isDuplex ? 'Both Sides (Duplex)' : 'Single Sided'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Paper & Orientation:</span>
-                  <span className="font-semibold text-slate-800">
-                    {activeOrder.paperSize || 'A4'} · {activeOrder.orientation === 'LANDSCAPE' ? 'Landscape (Horizontal ↔)' : 'Portrait (Vertical ↕)'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Pages & Copies:</span>
-                  <span className="font-semibold text-slate-800">
-                    {activeOrder.effectivePageCount} pages ({activeOrder.selectedPages}) × {activeOrder.copies} copy
-                  </span>
-                </div>
-                <div className="flex justify-between border-t border-slate-200 pt-2 font-black text-slate-900 text-sm sm:text-base">
-                  <span>Total Paid:</span>
-                  <span className="text-indigo-600">₹{(activeOrder.totalAmountPaise / 100).toFixed(2)}</span>
-                </div>
-              </div>
 
-              <div className="pt-2">
-                <button
-                  onClick={() => {
-                    if (previewUrl) URL.revokeObjectURL(previewUrl);
-                    if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
-                    setPreviewUrl(null);
-                    setBackPreviewUrl(null);
-                    setFile(null);
-                    setBackFile(null);
-                    setActiveOrder(null);
-                  }}
-                  className="w-full rounded-2xl bg-slate-900 py-3.5 text-sm font-bold text-white active:bg-slate-800 transition"
-                >
-                  Print Another Document
-                </button>
-              </div>
-            </div>
+                  {/* Token Number & Queue Position Card */}
+                  <div className="p-5 sm:p-6 rounded-3xl bg-gradient-to-b from-indigo-50/60 to-white border-2 border-indigo-100 shadow-sm text-center space-y-2.5">
+                    <span className="text-[10px] font-extrabold text-indigo-500 uppercase tracking-widest block">
+                      YOUR OFFICIAL PICKUP TOKEN
+                    </span>
+                    <h2 className="text-4xl sm:text-5xl font-black tracking-tight text-slate-900">
+                      TOKEN #{activeOrder.tokenNumber}
+                    </h2>
+                    
+                    {/* Live Queue Badge */}
+                    <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-900 text-white text-xs font-bold">
+                      <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                      <span>
+                        {isPrinted
+                          ? 'Completed • Ready at Counter'
+                          : isCurrentlyPrinting
+                          ? 'Printing Now!'
+                          : queuePosition === 1
+                          ? 'Next in Line (#1 in Queue)'
+                          : `Queue Position: #${queuePosition} in line`}
+                      </span>
+                    </div>
+
+                    <div className="pt-2 text-xs text-slate-600 flex items-center justify-center gap-2 flex-wrap">
+                      <span>Customer: <strong className="text-slate-900">{activeOrder.customerName || 'Customer'}</strong></span>
+                      <span>•</span>
+                      <span>Mobile: <strong className="text-slate-900">{activeOrder.customerPhone}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Mobile 3-Step Flow */}
+                  <div className="grid grid-cols-3 gap-1.5 sm:gap-2 pt-2 border-t border-slate-100">
+                    <div className={`text-center p-2 sm:p-2.5 rounded-xl border ${
+                      activeOrder.paymentStatus === 'PAID' 
+                        ? 'bg-emerald-50 border-emerald-200' 
+                        : 'bg-amber-50 border-amber-200'
+                    }`}>
+                      <span className="text-[9px] font-bold text-slate-500 block">STEP 1</span>
+                      <span className={`text-[11px] font-bold leading-tight block mt-0.5 ${
+                        activeOrder.paymentStatus === 'PAID' ? 'text-emerald-800' : 'text-amber-800'
+                      }`}>
+                        {activeOrder.paymentStatus === 'PAID' ? 'Paid via UPI' : 'Pay Cash'}
+                      </span>
+                    </div>
+                    <div className={`text-center p-2 sm:p-2.5 rounded-xl border ${
+                      isCurrentlyPrinting 
+                        ? 'bg-indigo-50 border-indigo-300 ring-2 ring-indigo-400/20' 
+                        : isPrinted 
+                        ? 'bg-emerald-50 border-emerald-200' 
+                        : 'bg-slate-50 border-slate-200'
+                    }`}>
+                      <span className="text-[9px] font-bold text-slate-500 block">STEP 2</span>
+                      <span className={`text-[11px] font-bold leading-tight block mt-0.5 ${
+                        isCurrentlyPrinting ? 'text-indigo-800' : isPrinted ? 'text-emerald-800' : 'text-slate-600'
+                      }`}>
+                        {isCurrentlyPrinting ? 'Printing...' : isPrinted ? 'Printed' : 'Shop Approval'}
+                      </span>
+                    </div>
+                    <div className={`text-center p-2 sm:p-2.5 rounded-xl border ${
+                      isPrinted 
+                        ? 'bg-emerald-100 border-emerald-300 font-bold text-emerald-900' 
+                        : 'bg-slate-50 border-slate-200 text-slate-400'
+                    }`}>
+                      <span className="text-[9px] font-bold block">STEP 3</span>
+                      <span className="text-[11px] font-bold leading-tight block mt-0.5">Ready for Pickup</span>
+                    </div>
+                  </div>
+
+                  {/* Order Summary Specs */}
+                  <div className="rounded-2xl bg-slate-50 p-3.5 sm:p-4 text-left text-xs space-y-2 text-slate-600 border border-slate-100">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-400">File Name:</span>
+                      <span className="font-bold text-slate-800 truncate max-w-[180px] sm:max-w-[240px]">{activeOrder.fileName}</span>
+                    </div>
+                    {activeOrder.uploadMode === 'ID_DOUBLE_SIDED' && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Print Style:</span>
+                        <span className="font-bold text-indigo-700">
+                          Front + Back ({activeOrder.idLayoutMode === 'SAME_SIDE' ? 'Both on 1 Sheet' : 'Two-Sided Duplex'})
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Print Mode:</span>
+                      <span className="font-semibold text-slate-800">
+                        {activeOrder.colorMode === 'COLOR' ? 'Color' : 'Black & White'} · {activeOrder.isDuplex ? 'Both Sides (Duplex)' : 'Single Sided'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Paper & Orientation:</span>
+                      <span className="font-semibold text-slate-800">
+                        {activeOrder.paperSize || 'A4'} · {activeOrder.orientation === 'LANDSCAPE' ? 'Landscape (Horizontal ↔)' : 'Portrait (Vertical ↕)'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Pages & Copies:</span>
+                      <span className="font-semibold text-slate-800">
+                        {activeOrder.effectivePageCount} pages ({activeOrder.selectedPages}) × {activeOrder.copies} copy
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-t border-slate-200 pt-2 font-black text-slate-900 text-sm sm:text-base">
+                      <span>Total Paid:</span>
+                      <span className="text-indigo-600">₹{(activeOrder.totalAmountPaise / 100).toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      onClick={() => {
+                        if (previewUrl) URL.revokeObjectURL(previewUrl);
+                        if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+                        filePreviews.forEach(p => URL.revokeObjectURL(p));
+                        setPreviewUrl(null);
+                        setBackPreviewUrl(null);
+                        setFile(null);
+                        setSelectedFiles([]);
+                        setFilePreviews([]);
+                        setFilePageCounts([]);
+                        setBackFile(null);
+                        setActiveOrder(null);
+                      }}
+                      className="w-full rounded-2xl bg-slate-900 py-3.5 text-sm font-bold text-white active:bg-slate-800 transition"
+                    >
+                      Print Another Document
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ) : (
           <div className="space-y-4 sm:space-y-5">
@@ -594,7 +778,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 </span>
               </div>
 
-              {/* Mode Tabs: Single Doc vs ID Card / Passbook */}
+              {/* Mode Tabs: Select File(s) vs ID Card / Passbook */}
               <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
                 <button
                   type="button"
@@ -609,8 +793,8 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     <FileText className="h-4 w-4" />
                   </div>
                   <div>
-                    <span className="block text-sm sm:text-base font-black text-slate-900 leading-tight">Single Document</span>
-                    <span className="text-[10px] sm:text-[11px] text-slate-500 font-medium leading-none block mt-0.5">PDF, Word, 1 Photo</span>
+                    <span className="block text-sm sm:text-base font-black text-slate-900 leading-tight">Select File(s)</span>
+                    <span className="text-[10px] sm:text-[11px] text-slate-500 font-medium leading-none block mt-0.5">PDFs, Photos, Documents</span>
                   </div>
                 </button>
 
@@ -635,16 +819,17 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
 
               {/* Upload Dropzones */}
               {uploadMode === 'SINGLE' ? (
-                /* SINGLE DOCUMENT UPLOAD */
-                <div className="pt-1">
+                /* SINGLE & MULTI-DOCUMENT UPLOAD */
+                <div className="pt-1 space-y-2.5">
                   {!file ? (
                     <div className="relative border-2 border-dashed border-indigo-200 hover:border-indigo-500 rounded-2xl p-6 sm:p-8 text-center bg-indigo-50/20 active:bg-indigo-50/40 transition cursor-pointer group">
                       <input
                         type="file"
+                        multiple
                         accept=".pdf,image/*,.doc,.docx"
                         onChange={(e) => {
-                          if (e.target.files && e.target.files[0]) {
-                            handleFileSelection(e.target.files[0]);
+                          if (e.target.files && e.target.files.length > 0) {
+                            handleMultipleFilesSelection(e.target.files);
                           }
                         }}
                         className="absolute inset-0 opacity-0 cursor-pointer w-full h-full z-10"
@@ -653,45 +838,83 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                         <Upload className="h-6 w-6 sm:h-7 sm:w-7" />
                       </div>
                       <p className="mt-2.5 text-sm font-bold text-slate-800">
-                        Tap here to select file from mobile
+                        Tap here to select file(s) from mobile
                       </p>
                       <p className="text-[11px] text-slate-500 mt-1">
-                        PDF, Photos, Word documents (up to 50 MB)
+                        Select 1 or multiple PDFs, Photos, Documents (up to 50 MB)
                       </p>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200">
-                      <div className="flex items-center gap-3 truncate min-w-0">
-                        <div className="h-10 w-10 shrink-0 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                          {previewFileType === 'pdf' ? 'PDF' : previewFileType === 'image' ? 'IMG' : 'DOC'}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200">
+                        <div className="flex items-center gap-3 truncate min-w-0">
+                          <div className="h-10 w-10 shrink-0 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                            {selectedFiles.length > 1 ? `${selectedFiles.length}F` : previewFileType === 'pdf' ? 'PDF' : previewFileType === 'image' ? 'IMG' : 'DOC'}
+                          </div>
+                          <div className="truncate min-w-0">
+                            <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                              {selectedFiles.length > 1 
+                                ? `${selectedFiles.length} Files Selected (File ${activeFileIndex + 1}: ${selectedFiles[activeFileIndex]?.name})`
+                                : fileName}
+                            </p>
+                            <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                              <span>{fileSizeStr}</span>
+                              <span>•</span>
+                              {isParsingPdf ? (
+                                <span className="text-amber-600 font-semibold animate-pulse">Counting pages...</span>
+                              ) : (
+                                <span className="font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded text-[10px]">
+                                  {pageCount} {pageCount === 1 ? 'Page' : 'Pages'} total
+                                </span>
+                              )}
+                            </p>
+                          </div>
                         </div>
-                        <div className="truncate min-w-0">
-                          <p className="text-xs sm:text-sm font-bold text-slate-900 truncate">
-                            {fileName}
-                          </p>
-                          <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                            <span>{fileSizeStr}</span>
-                            <span>•</span>
-                            {isParsingPdf ? (
-                              <span className="text-amber-600 font-semibold animate-pulse">Counting pages...</span>
-                            ) : (
-                              <span className="font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded text-[10px]">
-                                {pageCount} {pageCount === 1 ? 'Page' : 'Pages'}
-                              </span>
-                            )}
-                          </p>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (previewUrl) URL.revokeObjectURL(previewUrl);
+                            filePreviews.forEach(p => URL.revokeObjectURL(p));
+                            setFilePreviews([]);
+                            setSelectedFiles([]);
+                            setFilePageCounts([]);
+                            setPreviewUrl(null);
+                            setFile(null);
+                          }}
+                          className="text-xs font-bold text-rose-600 active:text-rose-700 px-3 py-2 shrink-0 rounded-xl bg-white border border-rose-200 shadow-xs"
+                        >
+                          Change
+                        </button>
                       </div>
-                      <button
-                        onClick={() => {
-                          if (previewUrl) URL.revokeObjectURL(previewUrl);
-                          setPreviewUrl(null);
-                          setFile(null);
-                        }}
-                        className="text-xs font-bold text-rose-600 active:text-rose-700 px-3 py-2 shrink-0 rounded-xl bg-white border border-rose-200 shadow-xs"
-                      >
-                        Change
-                      </button>
+
+                      {/* Multi-file interactive switcher chips */}
+                      {selectedFiles.length > 1 && (
+                        <div className="p-2.5 rounded-2xl bg-white border border-indigo-100 shadow-2xs space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium px-1">
+                            <span>Tap file to preview below:</span>
+                            <span className="font-bold text-indigo-700">{selectedFiles.length} documents</span>
+                          </div>
+                          <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5 no-scrollbar">
+                            {selectedFiles.map((f, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => handleSwitchActiveFile(idx)}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-1.5 border ${
+                                  activeFileIndex === idx
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <span>{idx + 1}. {f.name.length > 14 ? f.name.substring(0, 11) + '...' : f.name}</span>
+                                <span className={`text-[10px] ${activeFileIndex === idx ? 'text-indigo-200 font-semibold' : 'text-slate-400'}`}>
+                                  ({filePageCounts[idx] || 1}p)
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1405,104 +1628,152 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
               {/* Custom Page Range Selection */}
               {uploadMode === 'SINGLE' && (
                 <div className="pt-2 border-t border-slate-100">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-semibold text-slate-500">Pages to Print</span>
-                    {pageSelectionType === 'custom' && parsedCustomPages.length > 0 && (
-                      <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
-                        {parsedCustomPages.length} Pages
+                  {selectedFiles.length > 1 ? (
+                    <div className="p-3.5 rounded-2xl bg-indigo-50/60 border border-indigo-200 flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-indigo-950 block">
+                          All Pages ({pageCount} Pages Total)
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          Printing all pages across {selectedFiles.length} combined files. Custom page range is disabled for multi-file batches.
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-indigo-700 bg-white px-2 py-1 rounded-lg border border-indigo-200 shrink-0">
+                        Combined
                       </span>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className={`p-3 rounded-2xl border text-center text-xs font-bold cursor-pointer transition active:scale-[0.98] ${
-                      pageSelectionType === 'all'
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-950 ring-2 ring-indigo-600/20'
-                        : 'border-slate-200 bg-white text-slate-700'
-                    }`}>
-                      <input
-                        type="radio"
-                        name="pageSelection"
-                        checked={pageSelectionType === 'all'}
-                        onChange={() => {
-                          setPageSelectionType('all');
-                          setPreviewPageIndex(0);
-                        }}
-                        className="sr-only"
-                      />
-                      All {pageCount} Pages
-                    </label>
-
-                    <label className={`p-3 rounded-2xl border text-center text-xs font-bold cursor-pointer transition active:scale-[0.98] ${
-                      pageSelectionType === 'custom'
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-950 ring-2 ring-indigo-600/20'
-                        : 'border-slate-200 bg-white text-slate-700'
-                    }`}>
-                      <input
-                        type="radio"
-                        name="pageSelection"
-                        checked={pageSelectionType === 'custom'}
-                        onChange={() => {
-                          setPageSelectionType('custom');
-                          setPreviewPageIndex(0);
-                        }}
-                        className="sr-only"
-                      />
-                      Custom Range (1-3, 5, 8)
-                    </label>
-                  </div>
-
-                  {pageSelectionType === 'custom' && (
-                    <div className="mt-2.5 space-y-1.5">
-                      <input
-                        type="text"
-                        placeholder="e.g. 1-3, 5, 8"
-                        value={customPageRange}
-                        onChange={(e) => {
-                          setCustomPageRange(e.target.value);
-                          setPreviewPageIndex(0);
-                        }}
-                        className="w-full h-12 rounded-2xl border-2 border-slate-200 px-3.5 text-base text-slate-900 font-semibold focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
-                      />
-                      
-                      {customPageRange.trim() ? (
-                        parsedCustomPages.length > 0 ? (
-                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5 text-xs">
-                            <span className="text-emerald-700 font-bold flex items-center gap-1">
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Printing {parsedCustomPages.length} Pages:
-                            </span>
-                            <span className="font-mono font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
-                              {parsedCustomPages.join(', ')}
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-amber-600 font-medium">
-                            Use numbers and hyphens separated by comma, e.g. 1-3, 5, 8
-                          </p>
-                        )
-                      ) : (
-                        <p className="text-[11px] text-slate-400">
-                          Enter pages like <span className="font-mono font-bold text-slate-600">1-3, 5, 8</span> to print selected sheets only.
-                        </p>
-                      )}
                     </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-slate-500">Pages to Print</span>
+                        {pageSelectionType === 'custom' && parsedCustomPages.length > 0 && (
+                          <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                            {parsedCustomPages.length} Pages
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className={`p-3 rounded-2xl border text-center text-xs font-bold cursor-pointer transition active:scale-[0.98] ${
+                          pageSelectionType === 'all'
+                            ? 'border-indigo-600 bg-indigo-50 text-indigo-950 ring-2 ring-indigo-600/20'
+                            : 'border-slate-200 bg-white text-slate-700'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="pageSelection"
+                            checked={pageSelectionType === 'all'}
+                            onChange={() => {
+                              setPageSelectionType('all');
+                              setPreviewPageIndex(0);
+                            }}
+                            className="sr-only"
+                          />
+                          {pageCount > 1 ? `All Pages (${pageCount} Pages)` : 'All Pages'}
+                        </label>
+
+                        <label className={`p-3 rounded-2xl border text-center text-xs font-bold cursor-pointer transition active:scale-[0.98] ${
+                          pageSelectionType === 'custom'
+                            ? 'border-indigo-600 bg-indigo-50 text-indigo-950 ring-2 ring-indigo-600/20'
+                            : 'border-slate-200 bg-white text-slate-700'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="pageSelection"
+                            checked={pageSelectionType === 'custom'}
+                            onChange={() => {
+                              setPageSelectionType('custom');
+                              setPreviewPageIndex(0);
+                            }}
+                            className="sr-only"
+                          />
+                          Custom Range (1-3, 5, 8)
+                        </label>
+                      </div>
+
+                      {pageSelectionType === 'custom' && (
+                        <div className="mt-2.5 space-y-1.5">
+                          <input
+                            type="text"
+                            placeholder="e.g. 1-3, 5, 8"
+                            value={customPageRange}
+                            onChange={(e) => {
+                              setCustomPageRange(e.target.value);
+                              setPreviewPageIndex(0);
+                            }}
+                            className="w-full h-12 rounded-2xl border-2 border-slate-200 px-3.5 text-base text-slate-900 font-semibold focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
+                          />
+                          
+                          {customPageRange.trim() ? (
+                            parsedCustomPages.length > 0 ? (
+                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5 text-xs">
+                                <span className="text-emerald-700 font-bold flex items-center gap-1">
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Printing {parsedCustomPages.length} Pages:
+                                </span>
+                                <span className="font-mono font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
+                                  {parsedCustomPages.join(', ')}
+                                </span>
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-amber-600 font-medium">
+                                Use numbers and hyphens separated by comma, e.g. 1-3, 5, 8
+                              </p>
+                            )
+                          ) : (
+                            <p className="text-[11px] text-slate-400">
+                              Enter pages like <span className="font-mono font-bold text-slate-600">1-3, 5, 8</span> to print selected sheets only.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Mobile Phone Input for Token */}
-            <div className="rounded-2xl bg-white p-4 sm:p-5 shadow-sm border border-slate-200 space-y-1.5">
-              <label className="block text-xs font-bold text-slate-700">
-                Your Mobile Number (for pickup token SMS)
-              </label>
-              <input
-                type="tel"
-                placeholder="e.g. 9876543210"
-                value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
-                className="w-full h-12 rounded-2xl border-2 border-slate-200 px-3.5 text-base font-semibold text-slate-900 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
-              />
+            {/* Customer Details for Pickup Identification */}
+            <div className="rounded-2xl bg-white p-4 sm:p-5 shadow-sm border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <User className="h-4 w-4 text-indigo-600" />
+                  Your Pickup Details
+                </span>
+                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">
+                  Required
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Your Name *
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Rahul Sharma"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    className="w-full h-12 rounded-2xl border-2 border-slate-200 px-3.5 text-sm font-semibold text-slate-900 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Mobile Number *
+                  </label>
+                  <input
+                    type="tel"
+                    placeholder="e.g. 9876543210"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    className="w-full h-12 rounded-2xl border-2 border-slate-200 px-3.5 text-sm font-semibold text-slate-900 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-600/20"
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                The shopkeeper will verify your name and token number before handing over your prints.
+              </p>
             </div>
           </div>
         )}
@@ -1517,14 +1788,14 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 Total Price ({pricingSummary.sheetsCount} sheets × {copies})
               </span>
               <span className="text-2xl sm:text-3xl font-black text-slate-900 leading-tight">
-                ₹{pricingSummary.grandTotalRupees.toFixed(2)}
+                ₹{formattedGrandTotal}
               </span>
             </div>
 
             <button
               type="button"
               disabled={!file || isParsingPdf || isUploading}
-              onClick={() => setIsCheckingOut(true)}
+              onClick={handleInitiateCheckout}
               className={`flex items-center justify-center gap-2 rounded-2xl px-6 py-3.5 text-sm sm:text-base font-bold text-white shadow-lg transition-all active:scale-95 ${
                 file && !isParsingPdf && !isUploading
                   ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/25'
@@ -1538,7 +1809,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         </div>
       )}
 
-      {/* Instant Checkout & Real UPI Modal - Mobile Bottom Sheet Style */}
+      {/* Instant Checkout & Direct UPI Modal */}
       {isCheckingOut && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in">
           <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-white p-5 sm:p-6 shadow-2xl space-y-4">
@@ -1555,77 +1826,73 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
               </button>
             </div>
 
-            {/* Dynamic UPI Payment Card */}
-            <div className="rounded-2xl bg-gradient-to-b from-indigo-50 to-white border border-indigo-100 p-4 text-center space-y-3">
+            {/* Direct UPI Payment Card (No QR, Direct 1-Tap Pay) */}
+            <div className="rounded-2xl bg-gradient-to-b from-indigo-50 to-white border border-indigo-100 p-4 text-center space-y-3.5">
               <span className="text-xs font-bold text-indigo-700 uppercase tracking-wider">
-                Total to Pay
+                Total Amount
               </span>
-              <div className="text-3xl font-black text-slate-900">
-                ₹{pricingSummary.grandTotalRupees.toFixed(2)}
+              <div className="text-3xl sm:text-4xl font-black text-slate-900">
+                ₹{formattedGrandTotal}
               </div>
 
-              {/* Dynamic QR Code */}
-              <div className="mx-auto w-44 h-44 bg-white p-2.5 rounded-2xl border border-slate-200 shadow-sm flex flex-col items-center justify-center">
-                <img
-                  src={upiQrImageUrl}
-                  alt="UPI QR Code"
-                  className="h-32 w-32 object-contain"
-                />
-                <span className="text-[10px] font-bold text-slate-600 mt-1 truncate max-w-[150px]">
-                  UPI: {shop.upiId}
-                </span>
-              </div>
-
-              {/* Privacy Reassurance */}
-              <p className="text-center text-[11px] text-emerald-700 font-bold flex items-center justify-center gap-1.5 pt-0.5">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                <span>100% Private: Document is instantly deleted after printing</span>
-              </p>
-
-              {/* Mobile Deep Link button - 1-tap pay on phone */}
+              {/* Mobile 1-Tap UPI Intent Button */}
               <div className="pt-1">
                 <a
                   href={upiPayLink}
-                  className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-indigo-600 text-white px-4 py-3.5 text-sm font-bold shadow-md hover:bg-indigo-700 active:scale-95 transition"
+                  target="_self"
+                  className="w-full inline-flex items-center justify-center gap-2.5 rounded-2xl bg-gradient-to-r from-indigo-600 via-indigo-700 to-purple-700 text-white px-4 py-4 text-sm sm:text-base font-black shadow-lg shadow-indigo-600/30 hover:opacity-95 active:scale-[0.98] transition text-center"
                 >
-                  <Smartphone className="h-4 w-4" />
-                  <span>Tap to Pay with GPay / PhonePe / Paytm</span>
+                  <Smartphone className="h-5 w-5 shrink-0" />
+                  <span>Click & Pay ₹{formattedGrandTotal} with Any UPI App</span>
                 </a>
               </div>
-            </div>
 
-            {/* Optional UTR Input to verify payment */}
-            <div className="text-left bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-700">UPI Ref / UTR No. (Optional)</span>
-                <span className="text-[10px] text-slate-400 font-normal">from UPI App receipt</span>
+              {/* Supported UPI Apps Badges */}
+              <div className="flex items-center justify-center gap-1.5 flex-wrap text-[10px] font-bold text-slate-600 pt-0.5">
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">PhonePe</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">Google Pay</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">Paytm</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">BHIM</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">Cred</span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-slate-200 shadow-2xs">Any UPI</span>
               </div>
-              <input
-                type="text"
-                placeholder="e.g. 423812345678 (12-digit UTR)"
-                value={upiUtr}
-                onChange={(e) => setUpiUtr(e.target.value)}
-                className="w-full text-xs font-mono px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              <p className="text-[10px] text-slate-500 leading-tight">
-                Shopkeeper checks transaction soundbox or UTR number before handing over prints.
+
+              {/* UPI ID & Copy Option (For Desktop / Direct Transfer) */}
+              <div className="flex items-center justify-between p-3 rounded-2xl bg-white border border-slate-200 text-left text-xs shadow-2xs">
+                <div className="truncate min-w-0 pr-2">
+                  <span className="text-[10px] text-slate-400 block font-semibold uppercase">Shop UPI ID:</span>
+                  <span className="font-mono font-bold text-slate-800 truncate block">{cleanUpiId}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyUpi}
+                  className="px-2.5 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 font-bold text-indigo-700 hover:bg-indigo-100 shrink-0 text-xs active:scale-95 transition"
+                >
+                  {copiedUpi ? '✓ Copied' : 'Copy ID'}
+                </button>
+              </div>
+
+              {/* Privacy Reassurance */}
+              <p className="text-center text-[11px] text-emerald-700 font-bold flex items-center justify-center gap-1.5 pt-1">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                <span>100% Private: Document is instantly deleted after printing</span>
               </p>
             </div>
 
-            {/* Confirmation & Cash Buttons */}
+            {/* Step 2 Confirmation Buttons */}
             <div className="space-y-2 pt-1 pb-2">
               <button
                 type="button"
                 disabled={isUploading}
                 onClick={() => handlePlaceOrder('UPI')}
-                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-3.5 text-sm font-bold text-white shadow-md hover:bg-emerald-700 transition active:scale-95 disabled:opacity-60"
+                className="w-full flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3.5 text-sm font-bold text-white shadow-md transition active:scale-95 disabled:opacity-60"
               >
                 {isUploading ? (
                   <span>Uploading File ({uploadProgress}%)...</span>
                 ) : (
                   <>
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Confirm UPI Payment Done</span>
+                    <span>I Have Paid — Get My Print Token</span>
                   </>
                 )}
               </button>
@@ -1637,7 +1904,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 className="w-full flex items-center justify-center gap-2 rounded-2xl border border-slate-300 bg-white hover:bg-slate-50 py-3 text-xs font-bold text-slate-700 active:bg-slate-100 transition disabled:opacity-60 shadow-2xs"
               >
                 <IndianRupee className="h-3.5 w-3.5 text-slate-500" />
-                <span>Pay Cash at Counter (Shopkeeper will click Print)</span>
+                <span>Pay Cash at Counter (Shopkeeper will Accept & Print)</span>
               </button>
             </div>
           </div>

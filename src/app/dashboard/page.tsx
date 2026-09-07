@@ -7,10 +7,10 @@ import { useRouter } from 'next/navigation';
 import { 
   Printer, CheckCircle2, Clock, AlertTriangle, RefreshCw, 
   Settings, ExternalLink, QrCode, Play, Volume2, ShieldCheck, 
-  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User
+  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User, Trash2, X
 } from 'lucide-react';
 import { 
-  subscribeToShopOrdersRealtime, updateOrderStatusInCloud, updateShopInCloud 
+  subscribeToShopOrdersRealtime, updateOrderStatusInCloud, updateShopInCloud, deleteOrderFromCloud 
 } from '@/lib/firebase';
 import { useAuth, logoutUser } from '@/lib/auth';
 import { playNewOrderChime } from '@/lib/sound';
@@ -166,6 +166,43 @@ export default function MerchantDashboardPage() {
       }
     } catch (e) {
       console.warn('Auto-delete error:', e);
+    }
+  };
+
+  const handleRejectOrder = async (order: Order) => {
+    const confirmDelete = window.confirm(
+      `Reject Token #${order.tokenNumber} (${order.customerName || 'Customer'})?\n\nThis will delete the file and remove this order from queue.`
+    );
+    if (!confirmDelete) return;
+
+    try {
+      // 1. Delete file from cloud storage / Cloudinary
+      await fetch('/api/upload/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          publicId: order.publicId,
+          fileUrl: order.fileUrl,
+          orderId: order.id
+        })
+      });
+      if (order.backPublicId || order.backFileUrl) {
+        await fetch('/api/upload/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            publicId: order.backPublicId,
+            fileUrl: order.backFileUrl,
+            orderId: order.id + '_back'
+          })
+        });
+      }
+
+      // 2. Delete order from Cloud Firestore
+      await deleteOrderFromCloud(order.id);
+    } catch (e) {
+      console.error('Error rejecting order:', e);
+      alert('Could not reject order. Please check connection.');
     }
   };
 
@@ -432,8 +469,14 @@ export default function MerchantDashboardPage() {
                       <span className="text-base font-black">{order.tokenNumber}</span>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-1.5">
+                      {/* Customer Name & File Link */}
                       <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-xs font-black text-indigo-950 bg-indigo-50 px-2.5 py-0.5 rounded-lg border border-indigo-200">
+                          <User className="h-3.5 w-3.5 text-indigo-600" />
+                          <span>{order.customerName || 'Walk-in Customer'}</span>
+                        </span>
+
                         <div className="flex items-center gap-2 flex-wrap">
                           {order.fileUrl === 'WIPED_FOR_PRIVACY' ? (
                             <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md flex items-center gap-1 border border-emerald-200 shadow-2xs">
@@ -536,16 +579,26 @@ export default function MerchantDashboardPage() {
                       )}
                     </div>
 
-                    {/* Print Status Actions */}
+                    {/* Print Status Actions (Accept & Print vs Reject) */}
                     <div className="flex items-center gap-2">
                       {order.printStatus === 'QUEUED' && (
-                        <button
-                          onClick={() => handlePrintOrder(order)}
-                          className="flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 active:scale-95 transition"
-                        >
-                          <Play className="h-3.5 w-3.5" />
-                          <span>Print Now</span>
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+                          <button
+                            onClick={() => handlePrintOrder(order)}
+                            className="flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                            <span>Accept & Print</span>
+                          </button>
+
+                          <button
+                            onClick={() => handleRejectOrder(order)}
+                            className="flex items-center gap-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-3 py-2 text-xs font-bold active:scale-95 transition"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            <span>Reject</span>
+                          </button>
+                        </div>
                       )}
 
                       {order.printStatus === 'PRINTING' && (
@@ -556,9 +609,18 @@ export default function MerchantDashboardPage() {
                       )}
 
                       {order.printStatus === 'PRINTED' && (
-                        <div className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
-                          <Check className="h-4 w-4 text-emerald-600" />
-                          <span>Ready for Pickup</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200">
+                            <Check className="h-4 w-4 text-emerald-600" />
+                            <span>Ready for Pickup</span>
+                          </div>
+                          <button
+                            onClick={() => handleRejectOrder(order)}
+                            title="Delete / Clear Finished Order"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
                         </div>
                       )}
                     </div>
