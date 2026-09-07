@@ -171,6 +171,10 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     const unsubscribe = subscribeToSingleOrderRealtime(activeOrder.id, (updatedOrder) => {
       if (updatedOrder) {
         setActiveOrder(updatedOrder);
+      } else {
+        // Order was auto-expired after 10 mins or cancelled
+        alert('Your print request was cancelled or auto-expired due to a shop power outage. You can start a new print request now.');
+        setActiveOrder(null);
       }
     });
     return () => unsubscribe();
@@ -791,18 +795,23 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
               const queuePosition = activeQueueIndex >= 0 ? activeQueueIndex + 1 : 1;
               const isCurrentlyPrinting = activeOrder.printStatus === 'PRINTING';
               const isPrinted = activeOrder.printStatus === 'PRINTED';
+              const isHeldForConfirmation = activeOrder.printStatus === 'HELD_FOR_CONFIRMATION';
 
               return (
                 <div className="rounded-3xl bg-white p-5 sm:p-8 shadow-sm border border-slate-200 text-center space-y-4">
                   <div className={`inline-flex h-14 w-14 sm:h-16 sm:w-16 items-center justify-center rounded-full border ${
                     isPrinted 
                       ? 'bg-emerald-50 text-emerald-600 border-emerald-200' 
+                      : isHeldForConfirmation
+                      ? 'bg-amber-100 text-amber-700 border-amber-300 animate-pulse'
                       : isCurrentlyPrinting 
                       ? 'bg-indigo-50 text-indigo-600 border-indigo-200 animate-pulse'
                       : 'bg-amber-50 text-amber-600 border-amber-200'
                   }`}>
                     {isPrinted ? (
                       <CheckCircle2 className="h-7 w-7 sm:h-8 sm:w-8" />
+                    ) : isHeldForConfirmation ? (
+                      <AlertCircle className="h-7 w-7 sm:h-8 sm:w-8 text-amber-600" />
                     ) : isCurrentlyPrinting ? (
                       <Printer className="h-7 w-7 sm:h-8 sm:w-8 animate-bounce" />
                     ) : (
@@ -815,6 +824,8 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     <span className={`text-[11px] font-black uppercase tracking-wider px-3.5 py-1.5 rounded-full border ${
                       isPrinted
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : isHeldForConfirmation
+                        ? 'bg-amber-100 text-amber-900 border-amber-400'
                         : isCurrentlyPrinting
                         ? 'bg-indigo-50 text-indigo-700 border-indigo-300 animate-pulse'
                         : activeOrder.paymentStatus === 'PENDING'
@@ -823,6 +834,8 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                     }`}>
                       {isPrinted
                         ? '✓ Document Printed & Ready for Pickup'
+                        : isHeldForConfirmation
+                        ? '⚠️ Counter Interrupted by Power / Internet Outage'
                         : isCurrentlyPrinting
                         ? '⚡ Payment Accepted — Printing in Progress...'
                         : activeOrder.paymentStatus === 'PENDING'
@@ -846,6 +859,8 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                       <span>
                         {isPrinted
                           ? 'Completed • Ready at Counter'
+                          : isHeldForConfirmation
+                          ? 'Interrupted by Shop Outage'
                           : isCurrentlyPrinting
                           ? 'Printing Now!'
                           : queuePosition === 1
@@ -860,6 +875,34 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                         <p className="font-bold text-emerald-700">
                           🎉 Your document is printed! Please collect it from the counter.
                         </p>
+                      ) : isHeldForConfirmation ? (
+                        <div className="space-y-2 p-2 bg-amber-50/80 rounded-xl border border-amber-200">
+                          <p className="font-bold text-amber-900">
+                            ⚠️ Power or Internet Outage at Counter
+                          </p>
+                          <p className="text-[11px] text-amber-800">
+                            The shop experienced a power cut or network issue. The shopkeeper can click <strong>"Resume Print"</strong> at the counter to finish your job.
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            If you cannot wait, you can upload again. (Interrupted order auto-cancels in 10 mins).
+                          </p>
+                          <button
+                            onClick={() => {
+                              if (previewUrl) URL.revokeObjectURL(previewUrl);
+                              if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+                              filePreviews.forEach(p => URL.revokeObjectURL(p));
+                              setPreviewUrl(null);
+                              setBackPreviewUrl(null);
+                              setFile(null);
+                              setSelectedFiles([]);
+                              setActiveOrder(null);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white font-bold text-xs shadow-xs transition active:scale-95"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            <span>Upload Again / New Print</span>
+                          </button>
+                        </div>
                       ) : isCurrentlyPrinting ? (
                         <p className="font-bold text-indigo-700 animate-pulse">
                           ⚡ Shopkeeper verified payment and accepted your order! Printing now on the counter printer.

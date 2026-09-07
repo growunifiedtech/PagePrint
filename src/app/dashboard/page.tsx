@@ -47,6 +47,23 @@ export default function MerchantDashboardPage() {
     return () => unsubscribe();
   }, [shop?.id, prevOrderCount]);
 
+  // Auto-expire interrupted orders that were not resumed within 10 minutes
+  useEffect(() => {
+    const checkTimer = setInterval(() => {
+      const now = Date.now();
+      const TEN_MINS = 10 * 60 * 1000;
+      orders.forEach(o => {
+        if (o.printStatus === 'HELD_FOR_CONFIRMATION') {
+          const heldTime = new Date(o.heldAt || o.updatedAt || o.createdAt).getTime();
+          if (!isNaN(heldTime) && (now - heldTime > TEN_MINS)) {
+            handleRejectOrder(o);
+          }
+        }
+      });
+    }, 15000);
+    return () => clearInterval(checkTimer);
+  }, [orders]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50">
@@ -624,30 +641,39 @@ export default function MerchantDashboardPage() {
                         </div>
                       )}
 
-                      {order.printStatus === 'HELD_FOR_CONFIRMATION' && (
-                        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-                          <div className="flex items-center gap-1 text-[11px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1.5 rounded-xl">
-                            <AlertTriangle className="h-3.5 w-3.5 text-amber-700" />
-                            <span>Interrupted by Outage</span>
+                      {order.printStatus === 'HELD_FOR_CONFIRMATION' && (() => {
+                        const heldTime = new Date(order.heldAt || order.updatedAt || order.createdAt).getTime();
+                        const minsLeft = Math.max(0, 10 - Math.floor((Date.now() - heldTime) / 60000));
+                        return (
+                          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                            <div className="flex flex-col text-left sm:text-right">
+                              <span className="text-[11px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3 text-amber-700" />
+                                <span>Interrupted Outage</span>
+                              </span>
+                              <span className="text-[10px] text-amber-700 font-medium">
+                                Auto-expires in {minsLeft}m
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => handlePrintOrder(order)}
+                              className="flex items-center gap-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 px-3.5 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
+                              title="Customer is still waiting at counter, resume printing"
+                            >
+                              <Printer className="h-3.5 w-3.5" />
+                              <span>▶ Resume Print</span>
+                            </button>
+                            <button
+                              onClick={() => handleRejectOrder(order)}
+                              className="flex items-center gap-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-2 text-xs font-bold active:scale-95 transition"
+                              title="Customer left shop, cancel and remove"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              <span>Cancel</span>
+                            </button>
                           </div>
-                          <button
-                            onClick={() => handlePrintOrder(order)}
-                            className="flex items-center gap-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 px-3 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
-                            title="Customer is still waiting at counter, resume printing"
-                          >
-                            <Printer className="h-3.5 w-3.5" />
-                            <span>Resume Print</span>
-                          </button>
-                          <button
-                            onClick={() => handleRejectOrder(order)}
-                            className="flex items-center gap-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-2 text-xs font-bold active:scale-95 transition"
-                            title="Customer left shop, cancel and save paper"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                            <span>Cancel (Customer Left)</span>
-                          </button>
-                        </div>
-                      )}
+                        );
+                      })()}
 
                       {order.printStatus === 'PRINTED' && (
                         <div className="flex items-center gap-2">

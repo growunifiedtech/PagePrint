@@ -277,6 +277,7 @@ async function printJob(order, filePath, printerName) {
 
 // 4. Queue Processing Loop
 let isProcessingQueue = false;
+let isFirstCheckAfterStartup = true;
 
 async function checkAndProcessQueue(printers) {
   if (isProcessingQueue) return;
@@ -287,24 +288,26 @@ async function checkAndProcessQueue(printers) {
     const res = await makeRequest(queueUrl, 'GET');
 
     if (res.status === 200 && res.data && Array.isArray(res.data.orders) && res.data.orders.length > 0) {
-      for (const order of res.data.orders) {
-        // Power Cut / Outage Safety Check: If job is older than 25 mins, hold for confirmation
-        const orderTime = new Date(order.updatedAt || order.createdAt).getTime();
-        const orderAgeMs = Date.now() - orderTime;
-        const MAX_AUTO_PRINT_AGE_MS = 25 * 60 * 1000;
-
-        if (!isNaN(orderAgeMs) && orderAgeMs > MAX_AUTO_PRINT_AGE_MS) {
-          console.log(`\n⚠️ [POWER CUT SAFETY] Token #${order.tokenNumber} is ${Math.round(orderAgeMs / 60000)} mins old.`);
-          console.log(`   Job was received before power cut or extended delay. Holding on dashboard to avoid wasting paper & ink if customer left.`);
+      // Outage Recovery: If agent just booted up / reconnected, any unfinished PRINTING jobs were interrupted.
+      // Immediately hold them for confirmation so the dashboard shows the instant "Resume Print" button.
+      if (isFirstCheckAfterStartup) {
+        isFirstCheckAfterStartup = false;
+        for (const order of res.data.orders) {
+          console.log(`\n⚠️ [OUTAGE DETECTED] Token #${order.tokenNumber} was interrupted by power or internet outage.`);
+          console.log(`   Holding on dashboard for shopkeeper to click "Resume Print" (auto-cancels in 10 mins).`);
           try {
             await makeRequest(`${CONFIG.serverUrl}/api/agent/queue`, 'POST', {
               orderId: order.id,
-              status: 'HELD_FOR_CONFIRMATION'
+              status: 'HELD_FOR_CONFIRMATION',
+              heldAt: new Date().toISOString()
             });
           } catch (e) {}
-          continue;
         }
+        return;
+      }
+      isFirstCheckAfterStartup = false;
 
+      for (const order of res.data.orders) {
         console.log(`\n⚡ [NEW JOB] Token #${order.tokenNumber} | ${order.fileName} (${order.effectivePageCount} pages, ${order.colorMode})`);
 
         // Determine target printer

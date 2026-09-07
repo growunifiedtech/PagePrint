@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db, getShopBySlugFromCloud, updateOrderStatusInCloud } from '@/lib/firebase';
+import { db, getShopBySlugFromCloud, updateOrderStatusInCloud, deleteOrderFromCloud } from '@/lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { deleteRawFileFromCloudinary } from '@/lib/cloudinary';
 import { Order } from '@/types';
@@ -9,6 +9,7 @@ import path from 'path';
 /**
  * GET /api/agent/queue?shopSlug=xyz
  * Returns list of orders that are ready to be printed (printStatus === 'PRINTING')
+ * Also auto-purges any HELD_FOR_CONFIRMATION orders that were not resumed within 10 minutes.
  */
 export async function GET(req: NextRequest) {
   try {
@@ -24,6 +25,32 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: `Shop "${shopSlug}" not found` }, { status: 404 });
     }
 
+    // 1. Auto-clean: Purge any HELD_FOR_CONFIRMATION orders not resumed within 10 minutes
+    try {
+      const heldQ = query(
+        collection(db, 'orders'),
+        where('shopId', '==', shop.id),
+        where('printStatus', '==', 'HELD_FOR_CONFIRMATION')
+      );
+      const heldSnapshot = await getDocs(heldQ);
+      const now = Date.now();
+      const TEN_MINS_MS = 10 * 60 * 1000;
+
+      for (const d of heldSnapshot.docs) {
+        const orderData = d.data() as Order;
+        const heldTime = new Date(orderData.heldAt || orderData.updatedAt || orderData.createdAt).getTime();
+        if (!isNaN(heldTime) && (now - heldTime > TEN_MINS_MS)) {
+          console.log(`Auto-expiring un-resumed order ${d.id} (token #${orderData.tokenNumber}) after 10 mins.`);
+          if (orderData.publicId) await deleteRawFileFromCloudinary(orderData.publicId).catch(() => {});
+          if (orderData.backPublicId) await deleteRawFileFromCloudinary(orderData.backPublicId).catch(() => {});
+          await deleteOrderFromCloud(d.id).catch(() => {});
+        }
+      }
+    } catch (cleanErr) {
+      console.warn('Auto-clean held orders notice:', cleanErr);
+    }
+
+    // 2. Fetch active PRINTING orders
     const q = query(
       collection(db, 'orders'),
       where('shopId', '==', shop.id),
@@ -65,6 +92,7 @@ export async function POST(req: NextRequest) {
     if (status === 'HELD_FOR_CONFIRMATION') {
       await updateOrderStatusInCloud(orderId, {
         printStatus: 'HELD_FOR_CONFIRMATION',
+        heldAt: body.heldAt || new Date().toISOString(),
         updatedAt: new Date().toISOString()
       });
 

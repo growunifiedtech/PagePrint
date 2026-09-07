@@ -88,6 +88,7 @@ export interface Order {
   paymentId?: string;
   printStatus: PrintStatus;
   targetPrinterName?: string;
+  heldAt?: string;
   createdAt: string;
   updatedAt: string;
 }
