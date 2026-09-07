@@ -4,7 +4,7 @@ export type UploadMode = 'SINGLE' | 'ID_DOUBLE_SIDED';
 export type IdLayoutMode = 'SAME_SIDE' | 'SEPARATE_SIDES';
 export type PaperSize = 'A4' | 'A3' | 'A5' | 'LEGAL' | 'LETTER' | 'PHOTO_4X6' | 'B5';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'CASH_AT_COUNTER';
-export type PrintStatus = 'QUEUED' | 'PRINTING' | 'PRINTED' | 'FAILED';
+export type PrintStatus = 'QUEUED' | 'PRINTING' | 'PRINTED' | 'FAILED' | 'HELD_FOR_CONFIRMATION';
 
 export interface PricingConfig {
   bwSinglePaise: number;

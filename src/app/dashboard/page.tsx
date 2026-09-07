@@ -104,7 +104,8 @@ export default function MerchantDashboardPage() {
   const handlePrintOrder = async (order: Order) => {
     await updateOrderStatusInCloud(order.id, { 
       printStatus: 'PRINTING',
-      paymentStatus: 'PAID'
+      paymentStatus: 'PAID',
+      updatedAt: new Date().toISOString()
     });
     playNewOrderChime();
     
@@ -619,6 +620,31 @@ export default function MerchantDashboardPage() {
                           >
                             <Check className="h-3.5 w-3.5 text-emerald-600" />
                             <span>Done ✓</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {order.printStatus === 'HELD_FOR_CONFIRMATION' && (
+                        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+                          <div className="flex items-center gap-1 text-[11px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1.5 rounded-xl">
+                            <AlertTriangle className="h-3.5 w-3.5 text-amber-700" />
+                            <span>Interrupted by Outage</span>
+                          </div>
+                          <button
+                            onClick={() => handlePrintOrder(order)}
+                            className="flex items-center gap-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 px-3 py-2 text-xs font-bold text-white shadow-sm active:scale-95 transition"
+                            title="Customer is still waiting at counter, resume printing"
+                          >
+                            <Printer className="h-3.5 w-3.5" />
+                            <span>Resume Print</span>
+                          </button>
+                          <button
+                            onClick={() => handleRejectOrder(order)}
+                            className="flex items-center gap-1 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 px-2.5 py-2 text-xs font-bold active:scale-95 transition"
+                            title="Customer left shop, cancel and save paper"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                            <span>Cancel (Customer Left)</span>
                           </button>
                         </div>
                       )}

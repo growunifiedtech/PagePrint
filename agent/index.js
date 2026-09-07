@@ -288,6 +288,23 @@ async function checkAndProcessQueue(printers) {
 
     if (res.status === 200 && res.data && Array.isArray(res.data.orders) && res.data.orders.length > 0) {
       for (const order of res.data.orders) {
+        // Power Cut / Outage Safety Check: If job is older than 25 mins, hold for confirmation
+        const orderTime = new Date(order.updatedAt || order.createdAt).getTime();
+        const orderAgeMs = Date.now() - orderTime;
+        const MAX_AUTO_PRINT_AGE_MS = 25 * 60 * 1000;
+
+        if (!isNaN(orderAgeMs) && orderAgeMs > MAX_AUTO_PRINT_AGE_MS) {
+          console.log(`\n⚠️ [POWER CUT SAFETY] Token #${order.tokenNumber} is ${Math.round(orderAgeMs / 60000)} mins old.`);
+          console.log(`   Job was received before power cut or extended delay. Holding on dashboard to avoid wasting paper & ink if customer left.`);
+          try {
+            await makeRequest(`${CONFIG.serverUrl}/api/agent/queue`, 'POST', {
+              orderId: order.id,
+              status: 'HELD_FOR_CONFIRMATION'
+            });
+          } catch (e) {}
+          continue;
+        }
+
         console.log(`\n⚡ [NEW JOB] Token #${order.tokenNumber} | ${order.fileName} (${order.effectivePageCount} pages, ${order.colorMode})`);
 
         // Determine target printer

@@ -62,30 +62,45 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Update order status in Firestore
+    if (status === 'HELD_FOR_CONFIRMATION') {
+      await updateOrderStatusInCloud(orderId, {
+        printStatus: 'HELD_FOR_CONFIRMATION',
+        updatedAt: new Date().toISOString()
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: `Order ${orderId} held for confirmation on dashboard (power cut safety).`
+      });
+    }
+
     await updateOrderStatusInCloud(orderId, {
       printStatus: status,
-      paymentStatus: 'PAID'
+      paymentStatus: 'PAID',
+      updatedAt: new Date().toISOString()
     });
 
-    // 2. Trigger Instant Privacy Wipe
-    try {
-      if (publicId && publicId.startsWith('pageprint/')) {
-        await deleteRawFileFromCloudinary(publicId);
-      }
-      if (backPublicId && backPublicId.startsWith('pageprint/')) {
-        await deleteRawFileFromCloudinary(backPublicId);
-      }
+    // 2. Trigger Instant Privacy Wipe only when physically printed
+    if (status === 'PRINTED') {
+      try {
+        if (publicId && publicId.startsWith('pageprint/')) {
+          await deleteRawFileFromCloudinary(publicId);
+        }
+        if (backPublicId && backPublicId.startsWith('pageprint/')) {
+          await deleteRawFileFromCloudinary(backPublicId);
+        }
 
-      if (fileUrl && fileUrl.startsWith('/uploads/')) {
-        const localPath = path.join(process.cwd(), 'public', fileUrl);
-        if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+        if (fileUrl && fileUrl.startsWith('/uploads/')) {
+          const localPath = path.join(process.cwd(), 'public', fileUrl);
+          if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
+        }
+        if (backFileUrl && backFileUrl.startsWith('/uploads/')) {
+          const localBackPath = path.join(process.cwd(), 'public', backFileUrl);
+          if (fs.existsSync(localBackPath)) fs.unlinkSync(localBackPath);
+        }
+      } catch (wipeErr) {
+        console.warn('Privacy wipe error during agent print completion:', wipeErr);
       }
-      if (backFileUrl && backFileUrl.startsWith('/uploads/')) {
-        const localBackPath = path.join(process.cwd(), 'public', backFileUrl);
-        if (fs.existsSync(localBackPath)) fs.unlinkSync(localBackPath);
-      }
-    } catch (wipeErr) {
-      console.warn('Privacy wipe error during agent print completion:', wipeErr);
     }
 
     return NextResponse.json({
