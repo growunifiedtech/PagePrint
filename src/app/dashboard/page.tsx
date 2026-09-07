@@ -529,6 +529,11 @@ export default function MerchantDashboardPage() {
                       }`}>
                         {order.paymentStatus === 'PAID' ? '✓ Paid via UPI' : 'Cash at Counter'}
                       </span>
+                      {order.paymentId && (
+                        <span className="block text-[9px] font-mono text-slate-500 mt-0.5 max-w-[130px] truncate" title={order.paymentId}>
+                          {order.paymentId}
+                        </span>
+                      )}
                     </div>
 
                     {/* Print Status Actions */}

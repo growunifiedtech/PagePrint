@@ -6,7 +6,8 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { 
   Printer, Save, CheckCircle2, QrCode, ArrowLeft, 
-  Download, PrinterCheck, Plus, Trash2, Sliders, ShieldCheck
+  Download, PrinterCheck, Plus, Trash2, Sliders, ShieldCheck,
+  Store, CreditCard, IndianRupee
 } from 'lucide-react';
 import { updateShopInCloud } from '@/lib/firebase';
 import { useAuth } from '@/lib/auth';
@@ -186,14 +187,101 @@ export default function MerchantSettingsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left 2 Columns: Pricing & Printer Settings */}
           <div className="lg:col-span-2 space-y-6">
-            {/* 1. Custom Rate Card */}
+            {/* 1. Shop Profile & UPI Payment Settings */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <CreditCard className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">1. Shop Profile & UPI Payments</h2>
+                  <p className="text-xs text-slate-500">Configure where customer payments go and how prints trigger</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 block mb-1">
+                    Shop Display Name
+                  </label>
+                  <input
+                    type="text"
+                    value={shop.name}
+                    onChange={(e) => setShop({ ...shop, name: e.target.value })}
+                    className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 block mb-1">
+                    Counter Contact Phone
+                  </label>
+                  <input
+                    type="text"
+                    value={shop.phone}
+                    onChange={(e) => setShop({ ...shop, phone: e.target.value })}
+                    className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="text-xs font-semibold text-slate-600 block mb-1">
+                    Shop UPI ID / VPA (Payments go directly to your Bank)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 9876543210@paytm or yourshop@okhdfcbank"
+                    value={shop.upiId}
+                    onChange={(e) => setShop({ ...shop, upiId: e.target.value.trim() })}
+                    className="w-full h-11 rounded-xl border border-slate-200 px-3 text-sm font-mono font-bold text-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    100% direct bank transfer via NPCI UPI with zero gateway fees.
+                  </p>
+                </div>
+              </div>
+
+              {/* Auto-Print Security Control */}
+              <div className="border-t border-slate-100 pt-4">
+                <div className="flex items-start justify-between gap-4 p-4 rounded-xl border border-slate-200 bg-slate-50/70">
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-slate-900 block">
+                      Auto-Print Silently on UPI Confirmation
+                    </span>
+                    <p className="text-[11px] text-slate-500 leading-normal">
+                      {shop.autoPrintOnUpi ? (
+                        <span className="text-emerald-700 font-medium">
+                          ⚡ Enabled: Printer immediately starts when customer clicks "Confirm UPI".
+                        </span>
+                      ) : (
+                        <span className="text-indigo-700 font-medium">
+                          🛡️ Verification Mode (Safe): Orders arrive in queue with customer's UTR number. You click "Print Now" after hearing your Soundbox announcement.
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={shop.autoPrintOnUpi}
+                      onChange={(e) => setShop({ ...shop, autoPrintOnUpi: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. Custom Rate Card */}
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
                   <Sliders className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">1. Base Printing Rates</h2>
+                  <h2 className="text-base font-bold text-slate-900">2. Base Printing Rates</h2>
                   <p className="text-xs text-slate-500">Live prices shown to customers scanning your QR</p>
                 </div>
               </div>
@@ -337,7 +425,7 @@ export default function MerchantSettingsPage() {
               </div>
             </div>
 
-            {/* 2. Connected Printers & Routing Rules (Full Multi-Printer Manager) */}
+            {/* 3. Connected Printers & Routing Rules (Full Multi-Printer Manager) */}
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -345,7 +433,7 @@ export default function MerchantSettingsPage() {
                     <Printer className="h-5 w-5" />
                   </div>
                   <div>
-                    <h2 className="text-base font-bold text-slate-900">2. Connected Printers & Routing</h2>
+                    <h2 className="text-base font-bold text-slate-900">3. Connected Printers & Routing</h2>
                     <p className="text-xs text-slate-500">Works with any physical printer (Canon, HP, Epson, Brother, Ricoh, TVS &amp; more)</p>
                   </div>
                 </div>

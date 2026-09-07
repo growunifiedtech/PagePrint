@@ -84,6 +84,16 @@ export async function updateShopInCloud(shopId: string, updates: Partial<Shop>):
   await updateDoc(shopRef, updates);
 }
 
+function removeUndefined<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
+
 /**
  * Create a new real customer order in Firestore
  */
@@ -95,7 +105,8 @@ export async function createOrderInCloud(orderData: Omit<Order, 'id' | 'createdA
     createdAt: orderData.createdAt || new Date().toISOString(),
     updatedAt: orderData.updatedAt || new Date().toISOString()
   };
-  await setDoc(orderRef, newOrder);
+  const cleanData = removeUndefined(newOrder);
+  await setDoc(orderRef, cleanData);
   return newOrder;
 }
 
@@ -104,8 +115,9 @@ export async function createOrderInCloud(orderData: Omit<Order, 'id' | 'createdA
  */
 export async function updateOrderStatusInCloud(orderId: string, updates: Partial<Order>): Promise<void> {
   const orderRef = doc(db, 'orders', orderId);
+  const cleanUpdates = removeUndefined(updates);
   await updateDoc(orderRef, {
-    ...updates,
+    ...cleanUpdates,
     updatedAt: new Date().toISOString()
   });
 }
@@ -116,7 +128,8 @@ export async function updateOrderStatusInCloud(orderId: string, updates: Partial
 export async function syncOrderToCloud(order: Order): Promise<void> {
   try {
     const orderRef = doc(db, 'orders', order.id);
-    await setDoc(orderRef, { ...order, updatedAt: new Date().toISOString() }, { merge: true });
+    const cleanData = removeUndefined(order);
+    await setDoc(orderRef, { ...cleanData, updatedAt: new Date().toISOString() }, { merge: true });
   } catch (error) {
     console.error('Error syncing order to cloud:', error);
   }

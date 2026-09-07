@@ -119,6 +119,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   // Payment & Order Placement States
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [activeOrder, setActiveOrder] = useState<Order | null>(null);
+  const [upiUtr, setUpiUtr] = useState('');
 
   // Load shop from Firestore
   useEffect(() => {
@@ -353,20 +354,15 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       const tokenNumber = `${tokenLetter}-${tokenSuffix}`;
 
       // 4. Save Order in Cloud Firestore
-      const newOrder = await createOrderInCloud({
+      const orderPayload: any = {
         tokenNumber,
         shopId: shop.id,
         shopSlug: shop.slug,
         customerPhone: customerPhone || '9876543210',
         uploadMode,
-        idLayoutMode: uploadMode === 'ID_DOUBLE_SIDED' ? idLayoutMode : undefined,
         fileName: uploadMode === 'ID_DOUBLE_SIDED' && backFile ? `${file.name} + ${backFile.name}` : file.name,
         fileSizeBytes: file.size + (backFile ? backFile.size : 0),
         fileUrl: fileDownloadUrl,
-        publicId: uploadedPublicId,
-        backFileName: backFile ? backFile.name : undefined,
-        backFileUrl: backFileDownloadUrl || undefined,
-        backPublicId: backUploadedPublicId || undefined,
         pageCount: uploadMode === 'ID_DOUBLE_SIDED' ? (idLayoutMode === 'SAME_SIDE' ? 1 : 2) : pageCount,
         selectedPages: uploadMode === 'ID_DOUBLE_SIDED' 
           ? (idLayoutMode === 'SAME_SIDE' ? 'ID_SAME_SIDE' : 'ID_DUPLEX')
@@ -380,14 +376,24 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         additionalServices: [],
         totalAmountPaise: pricingSummary.grandTotalPaise,
         paymentStatus: paymentType === 'UPI' ? 'PAID' : 'CASH_AT_COUNTER',
-        paymentId: paymentType === 'UPI' ? 'upi_' + Date.now() : undefined,
+        paymentId: paymentType === 'UPI' ? (upiUtr.trim() ? `UTR: ${upiUtr.trim()}` : `UPI_${Date.now()}`) : `CASH_${Date.now()}`,
         printStatus: shop.autoPrintOnUpi && paymentType === 'UPI' ? 'PRINTING' : 'QUEUED',
         targetPrinterName: colorMode === 'COLOR' 
           ? shop.activePrinters?.find(p => p.supportsColor)?.name || 'Color Printer' 
           : shop.activePrinters?.find(p => !p.supportsColor)?.name || 'Laser B&W',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      });
+      };
+
+      if (uploadedPublicId) orderPayload.publicId = uploadedPublicId;
+      if (uploadMode === 'ID_DOUBLE_SIDED') {
+        orderPayload.idLayoutMode = idLayoutMode;
+        if (backFile) orderPayload.backFileName = backFile.name;
+        if (backFileDownloadUrl) orderPayload.backFileUrl = backFileDownloadUrl;
+        if (backUploadedPublicId) orderPayload.backPublicId = backUploadedPublicId;
+      }
+
+      const newOrder = await createOrderInCloud(orderPayload);
 
       setActiveOrder(newOrder);
       setIsCheckingOut(false);
@@ -396,9 +402,9 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       try {
         confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
       } catch {}
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error placing order:', error);
-      alert('Could not submit order. Please check your connection.');
+      alert(`Could not submit order: ${error?.message || 'Please check your network connection and try again.'}`);
     } finally {
       setIsUploading(false);
     }
@@ -1588,6 +1594,24 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
               </div>
             </div>
 
+            {/* Optional UTR Input to verify payment */}
+            <div className="text-left bg-slate-50 border border-slate-200 rounded-2xl p-3 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-700">UPI Ref / UTR No. (Optional)</span>
+                <span className="text-[10px] text-slate-400 font-normal">from UPI App receipt</span>
+              </div>
+              <input
+                type="text"
+                placeholder="e.g. 423812345678 (12-digit UTR)"
+                value={upiUtr}
+                onChange={(e) => setUpiUtr(e.target.value)}
+                className="w-full text-xs font-mono px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="text-[10px] text-slate-500 leading-tight">
+                Shopkeeper checks transaction soundbox or UTR number before handing over prints.
+              </p>
+            </div>
+
             {/* Confirmation & Cash Buttons */}
             <div className="space-y-2 pt-1 pb-2">
               <button
@@ -1601,7 +1625,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
                 ) : (
                   <>
                     <CheckCircle2 className="h-4 w-4" />
-                    <span>Confirm UPI Payment Done (Auto-Prints)</span>
+                    <span>Confirm UPI Payment Done</span>
                   </>
                 )}
               </button>
