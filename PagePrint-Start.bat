@@ -6,10 +6,14 @@ echo ========================================================
 cd /d "%~dp0"
 if exist "PagePrint.exe" (
     start "" "PagePrint.exe"
+    echo [OK] PagePrint Agent is now running in the background.
+    echo Check your dashboard at https://pageprint.in/dashboard
+    timeout /t 3 >nul
+    exit
 ) else (
-    start "" node index.js
+    echo [ERROR] PagePrint.exe not found in this directory!
+    echo Please extract all files from the ZIP before running.
+    echo.
+    pause
+    exit /b 1
 )
-echo [OK] PagePrint Agent is now running in the background.
-echo Check your dashboard at http://localhost:3000/dashboard
-timeout /t 3 >nul
-exit

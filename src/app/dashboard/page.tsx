@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { 
   Printer, CheckCircle2, Clock, AlertTriangle, RefreshCw, 
   Settings, ExternalLink, QrCode, Play, Volume2, ShieldCheck, 
-  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User, Trash2, X
+  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User, Trash2, X, Download
 } from 'lucide-react';
 import { 
   subscribeToShopOrdersRealtime, updateOrderStatusInCloud, updateShopInCloud, deleteOrderFromCloud 
@@ -374,6 +374,15 @@ export default function MerchantDashboardPage() {
             <span className="bg-white/10 px-3 py-1.5 rounded-lg text-slate-200 font-mono">
               Slug: {shop.slug}
             </span>
+            <a
+              href="/PagePrint-Windows-Agent.zip"
+              download="PagePrint-Windows-Agent.zip"
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 font-bold text-white transition shadow-sm"
+              title="Download 1-Click Windows Print Agent (.zip)"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Download Agent (.zip)</span>
+            </a>
             <button
               onClick={() => {
                 alert('Test print ticket dispatched to Windows Spooler!');
