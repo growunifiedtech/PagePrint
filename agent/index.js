@@ -30,7 +30,7 @@ if (fs.existsSync(CONFIG_FILE)) {
 
 const CONFIG = {
   shopSlug: process.env.PAGEPRINT_SHOP_SLUG || savedConfig.shopSlug || '',
-  serverUrl: process.env.PAGEPRINT_SERVER_URL || savedConfig.serverUrl || 'https://pageprint.in',
+  serverUrl: process.env.PAGEPRINT_SERVER_URL || savedConfig.serverUrl || 'https://www.pageprint.in',
   pollIntervalMs: 3000,
   tempDir: path.join(baseDir, 'temp')
 };
@@ -57,14 +57,14 @@ function promptShopSlug() {
       CONFIG.shopSlug = slug;
       
       console.log('\nServer Environment:');
-      console.log(' 1. Cloud Production (https://pageprint.in) [Default]');
+      console.log(' 1. Cloud Production (https://www.pageprint.in) [Default]');
       console.log(' 2. Localhost Test   (http://localhost:3000)');
       rl.question('Choose Server [1 or 2, default 1]: ', (srvAns) => {
         rl.close();
         if (srvAns.trim() === '2') {
           CONFIG.serverUrl = 'http://localhost:3000';
         } else {
-          CONFIG.serverUrl = 'https://pageprint.in';
+          CONFIG.serverUrl = 'https://www.pageprint.in';
         }
 
         try {
@@ -77,13 +77,17 @@ function promptShopSlug() {
   });
 }
 
-function makeRequest(url, method = 'GET', data = null) {
+function makeRequest(url, method = 'GET', data = null, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (redirectCount > 5) {
+      return reject(new Error('Too many HTTP redirects'));
+    }
     try {
       const parsedUrl = new URL(url);
       const isHttps = parsedUrl.protocol === 'https:';
       const client = isHttps ? https : http;
 
+      const postData = data ? JSON.stringify(data) : null;
       const options = {
         hostname: parsedUrl.hostname,
         port: parsedUrl.port || (isHttps ? 443 : 80),
@@ -91,12 +95,21 @@ function makeRequest(url, method = 'GET', data = null) {
         method: method,
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'PagePrint-DesktopAgent/1.0'
+          'User-Agent': 'PagePrint-DesktopAgent/1.0',
+          ...(postData ? { 'Content-Length': Buffer.byteLength(postData) } : {})
         },
         timeout: 10000
       };
 
       const req = client.request(options, (res) => {
+        // Automatically follow HTTP 301, 302, 307, 308 redirects (e.g. apex to www)
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const redirectUrl = new URL(res.headers.location, url).toString();
+          const newMethod = (res.statusCode === 307 || res.statusCode === 308) ? method : 'GET';
+          const newData = (res.statusCode === 307 || res.statusCode === 308) ? data : null;
+          return makeRequest(redirectUrl, newMethod, newData, redirectCount + 1).then(resolve).catch(reject);
+        }
+
         let body = '';
         res.on('data', (chunk) => body += chunk);
         res.on('end', () => {
@@ -115,8 +128,8 @@ function makeRequest(url, method = 'GET', data = null) {
         reject(new Error('Request timed out'));
       });
 
-      if (data) {
-        req.write(JSON.stringify(data));
+      if (postData) {
+        req.write(postData);
       }
       req.end();
     } catch (err) {
