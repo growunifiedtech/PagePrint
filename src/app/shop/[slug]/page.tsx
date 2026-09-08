@@ -366,6 +366,127 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     []
   );
 
+  // Instant client-side photo compression for camera uploads (down to ~600 KB with 300 DPI clarity)
+  const compressImageIfLarge = async (f: File): Promise<File> => {
+    if (!f || !f.type.startsWith('image/')) return f;
+    if (f.size < 1.5 * 1024 * 1024) return f;
+
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      const url = URL.createObjectURL(f);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const maxDim = 2400; // 300 DPI on 8-inch A4 width
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(f);
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          (blob) => {
+            if (blob && blob.size < f.size) {
+              resolve(new File([blob], f.name.replace(/\.[^/.]+$/, '') + '.jpg', { type: 'image/jpeg' }));
+            } else {
+              resolve(f);
+            }
+          },
+          'image/jpeg',
+          0.88
+        );
+      };
+      img.onerror = () => resolve(f);
+      img.src = url;
+    });
+  };
+
+  // Ultra-fast direct CDN upload (bypasses Vercel 4.5MB limit & 10s timeouts)
+  const uploadDocumentDirect = async (
+    targetFile: File,
+    shopId: string,
+    onProgress: (pct: number) => void
+  ): Promise<{ fileUrl: string; publicId: string }> => {
+    // 1. Try Direct Cloudinary signed upload
+    try {
+      const signRes = await fetch(`/api/upload/sign?shopId=${encodeURIComponent(shopId)}`);
+      if (signRes.ok) {
+        const signData = await signRes.json();
+        if (signData.signature && signData.cloudName) {
+          const formData = new FormData();
+          formData.append('file', targetFile);
+          formData.append('api_key', signData.apiKey);
+          formData.append('timestamp', signData.timestamp.toString());
+          formData.append('signature', signData.signature);
+          formData.append('folder', signData.folder);
+
+          const directResult = await new Promise<{ fileUrl: string; publicId: string }>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `https://api.cloudinary.com/v1_1/${signData.cloudName}/auto/upload`);
+            xhr.upload.onprogress = (e) => {
+              if (e.lengthComputable) {
+                const pct = Math.round((e.loaded / e.total) * 90);
+                onProgress(Math.max(15, pct));
+              }
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                try {
+                  const res = JSON.parse(xhr.responseText);
+                  if (res.secure_url) {
+                    onProgress(100);
+                    return resolve({ fileUrl: res.secure_url, publicId: res.public_id || '' });
+                  }
+                } catch (e) {}
+              }
+              reject(new Error(`Direct upload status ${xhr.status}`));
+            };
+            xhr.onerror = () => reject(new Error('Direct upload network error'));
+            xhr.ontimeout = () => reject(new Error('Direct upload timeout'));
+            xhr.timeout = 60000;
+            xhr.send(formData);
+          });
+
+          return directResult;
+        }
+      }
+    } catch (err) {
+      console.warn('Direct upload notice, trying server fallback:', err);
+    }
+
+    // 2. Fallback to /api/upload
+    const uploadFormData = new FormData();
+    uploadFormData.append('file', targetFile);
+    uploadFormData.append('shopId', shopId);
+    uploadFormData.append('orderId', 'ord_' + Date.now());
+
+    onProgress(50);
+    const uploadRes = await fetch('/api/upload', {
+      method: 'POST',
+      body: uploadFormData
+    });
+
+    if (uploadRes.ok) {
+      const uploadData = await uploadRes.json();
+      if (uploadData.fileUrl) {
+        onProgress(100);
+        return { fileUrl: uploadData.fileUrl, publicId: uploadData.publicId || '' };
+      }
+    }
+
+    throw new Error('Upload failed. Please check your internet connection.');
+  };
+
   // Place Order & Upload Document(s)
   const handlePlaceOrder = async (paymentType: 'UPI' | 'CASH') => {
     if (!file && (!selectedFiles || selectedFiles.length === 0)) return;
@@ -377,266 +498,239 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       let backFileDownloadUrl = '';
       let backUploadedPublicId = '';
 
-      // Prepare file to upload (synthesize into standard printable PDF with exact layout, paper size & orientation)
       let primaryUploadFile = file || selectedFiles[0];
-      try {
-        setUploadProgress(15);
-        const { PDFDocument } = await import('pdf-lib');
-        const mergedPdf = await PDFDocument.create();
+      let processedBackFile = backFile;
 
-        // Standard paper sizes in points (72 points / inch; 1 mm = 72 / 25.4 pt ≈ 2.83465 pt)
-        const paperDimensionsPt: Record<PaperSize, { width: number; height: number }> = {
-          A4: { width: 595.28, height: 841.89 },
-          LEGAL: { width: 612.28, height: 1009.13 },
-          A3: { width: 841.89, height: 1190.55 },
-          A5: { width: 419.53, height: 595.28 },
-          PHOTO_4X6: { width: 283.46, height: 425.20 },
-          LETTER: { width: 612.28, height: 790.87 },
-          B5: { width: 498.90, height: 708.66 },
-        };
+      // Compress heavy photos instantly before any processing
+      primaryUploadFile = await compressImageIfLarge(primaryUploadFile);
+      if (processedBackFile) {
+        processedBackFile = await compressImageIfLarge(processedBackFile);
+      }
 
-        const baseDim = paperDimensionsPt[paperSize] || paperDimensionsPt.A4;
-        const sheetWidth = orientation === 'PORTRAIT' ? baseDim.width : baseDim.height;
-        const sheetHeight = orientation === 'PORTRAIT' ? baseDim.height : baseDim.width;
+      // Check if standard single PDF with all pages (Skip heavy pdf-lib synthesis!)
+      const isSinglePdfAllPages = uploadMode === 'SINGLE' && selectedFiles.length <= 1 && (primaryUploadFile.type === 'application/pdf' || primaryUploadFile.name.toLowerCase().endsWith('.pdf')) && (pageSelectionType === 'all' || !customPageRange.trim());
 
-        const embedImageSafe = async (f: File) => {
-          const buffer = await f.arrayBuffer();
-          if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
-            return await mergedPdf.embedJpg(buffer);
-          } else {
-            return await mergedPdf.embedPng(buffer);
-          }
-        };
+      if (!isSinglePdfAllPages) {
+        try {
+          setUploadProgress(15);
+          const { PDFDocument } = await import('pdf-lib');
+          const mergedPdf = await PDFDocument.create();
 
-        if (uploadMode === 'ID_DOUBLE_SIDED' && file && backFile) {
-          // ID Card / Passbook 2-Sided Synthesis
-          const frontImg = file.type.startsWith('image/') ? await embedImageSafe(file) : null;
-          const backImg = backFile.type.startsWith('image/') ? await embedImageSafe(backFile) : null;
+          // Standard paper sizes in points (72 points / inch; 1 mm = 72 / 25.4 pt ≈ 2.83465 pt)
+          const paperDimensionsPt: Record<PaperSize, { width: number; height: number }> = {
+            A4: { width: 595.28, height: 841.89 },
+            LEGAL: { width: 612.28, height: 1009.13 },
+            A3: { width: 841.89, height: 1190.55 },
+            A5: { width: 419.53, height: 595.28 },
+            PHOTO_4X6: { width: 283.46, height: 425.20 },
+            LETTER: { width: 612.28, height: 790.87 },
+            B5: { width: 498.90, height: 708.66 },
+          };
 
-          if (idLayoutMode === 'SAME_SIDE') {
-            // Front & Back on top and bottom halves of a single sheet
-            const sheet = mergedPdf.addPage([sheetWidth, sheetHeight]);
-            const halfH = sheetHeight / 2;
-            const cardMaxW = Math.min(sheetWidth * 0.75, 340);
-            const cardMaxH = Math.min(halfH * 0.75, 215);
+          const baseDim = paperDimensionsPt[paperSize] || paperDimensionsPt.A4;
+          const sheetWidth = orientation === 'PORTRAIT' ? baseDim.width : baseDim.height;
+          const sheetHeight = orientation === 'PORTRAIT' ? baseDim.height : baseDim.width;
 
-            if (frontImg) {
-              const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
-              const w = frontImg.width * s;
-              const h = frontImg.height * s;
-              sheet.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: halfH + (halfH - h) / 2, width: w, height: h });
+          const embedImageSafe = async (f: File) => {
+            const buffer = await f.arrayBuffer();
+            if (f.type === 'image/jpeg' || f.name.toLowerCase().endsWith('.jpg') || f.name.toLowerCase().endsWith('.jpeg')) {
+              return await mergedPdf.embedJpg(buffer);
+            } else {
+              return await mergedPdf.embedPng(buffer);
             }
-            if (backImg) {
-              const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
-              const w = backImg.width * s;
-              const h = backImg.height * s;
-              sheet.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (halfH - h) / 2, width: w, height: h });
-            }
-          } else {
-            // DUPLEX: Front on Page 1, Back on Page 2
-            const cardMaxW = Math.min(sheetWidth * 0.8, 380);
-            const cardMaxH = Math.min(sheetHeight * 0.8, 240);
+          };
 
-            const page1 = mergedPdf.addPage([sheetWidth, sheetHeight]);
-            if (frontImg) {
-              const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
-              const w = frontImg.width * s;
-              const h = frontImg.height * s;
-              page1.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
-            }
+          if (uploadMode === 'ID_DOUBLE_SIDED' && primaryUploadFile && processedBackFile) {
+            // ID Card / Passbook 2-Sided Synthesis
+            const frontImg = primaryUploadFile.type.startsWith('image/') ? await embedImageSafe(primaryUploadFile) : null;
+            const backImg = processedBackFile.type.startsWith('image/') ? await embedImageSafe(processedBackFile) : null;
 
-            const page2 = mergedPdf.addPage([sheetWidth, sheetHeight]);
-            if (backImg) {
-              const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
-              const w = backImg.width * s;
-              const h = backImg.height * s;
-              page2.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
-            }
-          }
+            if (idLayoutMode === 'SAME_SIDE') {
+              const sheet = mergedPdf.addPage([sheetWidth, sheetHeight]);
+              const halfH = sheetHeight / 2;
+              const cardMaxW = Math.min(sheetWidth * 0.75, 340);
+              const cardMaxH = Math.min(halfH * 0.75, 215);
 
-          const mergedBytes = await mergedPdf.save();
-          primaryUploadFile = new File([mergedBytes as any], `ID_Card_${idLayoutMode}.pdf`, { type: 'application/pdf' });
+              if (frontImg) {
+                const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
+                const w = frontImg.width * s;
+                const h = frontImg.height * s;
+                sheet.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: halfH + (halfH - h) / 2, width: w, height: h });
+              }
+              if (backImg) {
+                const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
+                const w = backImg.width * s;
+                const h = backImg.height * s;
+                sheet.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (halfH - h) / 2, width: w, height: h });
+              }
+            } else {
+              const cardMaxW = Math.min(sheetWidth * 0.8, 380);
+              const cardMaxH = Math.min(sheetHeight * 0.8, 240);
 
-        } else if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
-          if (pagesPerSheet === 1) {
-            // 1-on-1: Append each file as a full sheet
-            for (const f of selectedFiles) {
-              if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-                const buffer = await f.arrayBuffer();
-                const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-                const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
-                copiedPages.forEach(p => mergedPdf.addPage(p));
-              } else if (f.type.startsWith('image/')) {
-                const img = await embedImageSafe(f);
-                const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
-                const margin = 18;
-                const availW = sheetWidth - (margin * 2);
-                const availH = sheetHeight - (margin * 2);
-                const s = (paperFitting === 'FILL'
-                  ? Math.max(availW / img.width, availH / img.height)
-                  : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
-                const drawW = img.width * s;
-                const drawH = img.height * s;
-                const drawX = margin + (availW - drawW) / 2;
-                const drawY = margin + (availH - drawH) / 2;
-                page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
+              const page1 = mergedPdf.addPage([sheetWidth, sheetHeight]);
+              if (frontImg) {
+                const s = Math.min(cardMaxW / frontImg.width, cardMaxH / frontImg.height);
+                const w = frontImg.width * s;
+                const h = frontImg.height * s;
+                page1.drawImage(frontImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
+              }
+
+              const page2 = mergedPdf.addPage([sheetWidth, sheetHeight]);
+              if (backImg) {
+                const s = Math.min(cardMaxW / backImg.width, cardMaxH / backImg.height);
+                const w = backImg.width * s;
+                const h = backImg.height * s;
+                page2.drawImage(backImg, { x: (sheetWidth - w) / 2, y: (sheetHeight - h) / 2, width: w, height: h });
               }
             }
-          } else {
-            // Multi-up grid layout (2, 4, 6 per sheet)
-            const cols = pagesPerSheet === 2 
-              ? (orientation === 'LANDSCAPE' ? 2 : 1) 
-              : pagesPerSheet === 4 
-              ? 2 
-              : (orientation === 'LANDSCAPE' ? 3 : 2);
-            const rows = pagesPerSheet === 2 
-              ? (orientation === 'LANDSCAPE' ? 1 : 2) 
-              : pagesPerSheet === 4 
-              ? 2 
-              : (orientation === 'LANDSCAPE' ? 2 : 3);
 
-            const margin = 18;
-            const gap = 12;
-            const totalGapX = gap * (cols - 1);
-            const totalGapY = gap * (rows - 1);
-            const slotW = (sheetWidth - (margin * 2) - totalGapX) / cols;
-            const slotH = (sheetHeight - (margin * 2) - totalGapY) / rows;
+            const mergedBytes = await mergedPdf.save();
+            primaryUploadFile = new File([mergedBytes as any], `ID_Card_${idLayoutMode}.pdf`, { type: 'application/pdf' });
 
-            for (let i = 0; i < selectedFiles.length; i += pagesPerSheet) {
-              const chunk = selectedFiles.slice(i, i + pagesPerSheet);
-              const sheetPage = mergedPdf.addPage([sheetWidth, sheetHeight]);
+          } else if (uploadMode === 'SINGLE' && selectedFiles.length > 1) {
+            if (pagesPerSheet === 1) {
+              for (const f of selectedFiles) {
+                if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+                  const buffer = await f.arrayBuffer();
+                  const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+                  const copiedPages = await mergedPdf.copyPages(doc, doc.getPageIndices());
+                  copiedPages.forEach(p => mergedPdf.addPage(p));
+                } else if (f.type.startsWith('image/')) {
+                  const compressed = await compressImageIfLarge(f);
+                  const img = await embedImageSafe(compressed);
+                  const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
+                  const margin = 18;
+                  const availW = sheetWidth - (margin * 2);
+                  const availH = sheetHeight - (margin * 2);
+                  const s = (paperFitting === 'FILL'
+                    ? Math.max(availW / img.width, availH / img.height)
+                    : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                  const drawW = img.width * s;
+                  const drawH = img.height * s;
+                  const drawX = margin + (availW - drawW) / 2;
+                  const drawY = margin + (availH - drawH) / 2;
+                  page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
+                }
+              }
+            } else {
+              const cols = pagesPerSheet === 2 
+                ? (orientation === 'LANDSCAPE' ? 2 : 1) 
+                : pagesPerSheet === 4 
+                ? 2 
+                : (orientation === 'LANDSCAPE' ? 3 : 2);
+              const rows = pagesPerSheet === 2 
+                ? (orientation === 'LANDSCAPE' ? 1 : 2) 
+                : pagesPerSheet === 4 
+                ? 2 
+                : (orientation === 'LANDSCAPE' ? 2 : 3);
 
-              for (let cIdx = 0; cIdx < chunk.length; cIdx++) {
-                const f = chunk[cIdx];
-                const col = cIdx % cols;
-                const row = Math.floor(cIdx / cols);
+              const margin = 18;
+              const gap = 12;
+              const totalGapX = gap * (cols - 1);
+              const totalGapY = gap * (rows - 1);
+              const slotW = (sheetWidth - (margin * 2) - totalGapX) / cols;
+              const slotH = (sheetHeight - (margin * 2) - totalGapY) / rows;
 
-                // Bottom-left origin in PDF:
-                const slotX = margin + col * (slotW + gap);
-                const slotY = sheetHeight - margin - ((row + 1) * slotH) - (row * gap);
+              for (let i = 0; i < selectedFiles.length; i += pagesPerSheet) {
+                const chunk = selectedFiles.slice(i, i + pagesPerSheet);
+                const sheetPage = mergedPdf.addPage([sheetWidth, sheetHeight]);
 
-                try {
-                  if (f.type.startsWith('image/')) {
-                    const img = await embedImageSafe(f);
-                    const s = (paperFitting === 'FILL'
-                      ? Math.max(slotW / img.width, slotH / img.height)
-                      : Math.min(slotW / img.width, slotH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
-                    const drawW = img.width * s;
-                    const drawH = img.height * s;
-                    const drawX = slotX + (slotW - drawW) / 2;
-                    const drawY = slotY + (slotH - drawH) / 2;
-                    sheetPage.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
-                  } else if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-                    const buffer = await f.arrayBuffer();
-                    const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-                    if (doc.getPageCount() > 0) {
-                      const embeddedPage = await mergedPdf.embedPage(doc.getPages()[0]);
-                      const s = Math.min(slotW / embeddedPage.width, slotH / embeddedPage.height) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
-                      const drawW = embeddedPage.width * s;
-                      const drawH = embeddedPage.height * s;
+                for (let cIdx = 0; cIdx < chunk.length; cIdx++) {
+                  const f = chunk[cIdx];
+                  const col = cIdx % cols;
+                  const row = Math.floor(cIdx / cols);
+                  const slotX = margin + col * (slotW + gap);
+                  const slotY = sheetHeight - margin - ((row + 1) * slotH) - (row * gap);
+
+                  try {
+                    if (f.type.startsWith('image/')) {
+                      const compressed = await compressImageIfLarge(f);
+                      const img = await embedImageSafe(compressed);
+                      const s = (paperFitting === 'FILL'
+                        ? Math.max(slotW / img.width, slotH / img.height)
+                        : Math.min(slotW / img.width, slotH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                      const drawW = img.width * s;
+                      const drawH = img.height * s;
                       const drawX = slotX + (slotW - drawW) / 2;
                       const drawY = slotY + (slotH - drawH) / 2;
-                      sheetPage.drawPage(embeddedPage, { x: drawX, y: drawY, width: drawW, height: drawH });
+                      sheetPage.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
+                    } else if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+                      const buffer = await f.arrayBuffer();
+                      const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+                      if (doc.getPageCount() > 0) {
+                        const embeddedPage = await mergedPdf.embedPage(doc.getPages()[0]);
+                        const s = Math.min(slotW / embeddedPage.width, slotH / embeddedPage.height) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+                        const drawW = embeddedPage.width * s;
+                        const drawH = embeddedPage.height * s;
+                        const drawX = slotX + (slotW - drawW) / 2;
+                        const drawY = slotY + (slotH - drawH) / 2;
+                        sheetPage.drawPage(embeddedPage, { x: drawX, y: drawY, width: drawW, height: drawH });
+                      }
                     }
+                  } catch (slotErr) {
+                    console.warn('Error placing file in multi-up slot:', f.name, slotErr);
                   }
-                } catch (slotErr) {
-                  console.warn('Error placing file in multi-up slot:', f.name, slotErr);
                 }
               }
             }
-          }
 
-          const mergedBytes = await mergedPdf.save();
-          primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files_${pagesPerSheet}Up.pdf`, { type: 'application/pdf' });
-        } else if (uploadMode === 'SINGLE' && selectedFiles.length === 1) {
-          const singleF = selectedFiles[0];
-          if (singleF.type.startsWith('image/')) {
-            // Embed single image cleanly into paper-sized PDF
-            const img = await embedImageSafe(singleF);
-            const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
-            const margin = 18;
-            const availW = sheetWidth - (margin * 2);
-            const availH = sheetHeight - (margin * 2);
-            const s = (paperFitting === 'FILL'
-              ? Math.max(availW / img.width, availH / img.height)
-              : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
-            const drawW = img.width * s;
-            const drawH = img.height * s;
-            const drawX = margin + (availW - drawW) / 2;
-            const drawY = margin + (availH - drawH) / 2;
-            page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
             const mergedBytes = await mergedPdf.save();
-            primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Print.pdf`, { type: 'application/pdf' });
-          } else if ((singleF.type === 'application/pdf' || singleF.name.toLowerCase().endsWith('.pdf')) && pageSelectionType === 'custom' && customPageRange.trim()) {
-            // Trim single PDF to custom selected pages
-            const buffer = await singleF.arrayBuffer();
-            const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-            const totalP = doc.getPageCount();
-            const chosen = parsePageRange(customPageRange, totalP);
-            const zeroIndexed = chosen.map(p => p - 1).filter(idx => idx >= 0 && idx < totalP);
-            if (zeroIndexed.length > 0) {
-              const copiedPages = await mergedPdf.copyPages(doc, zeroIndexed);
-              copiedPages.forEach(p => mergedPdf.addPage(p));
+            primaryUploadFile = new File([mergedBytes as any], `Combined_${selectedFiles.length}_Files_${pagesPerSheet}Up.pdf`, { type: 'application/pdf' });
+          } else if (uploadMode === 'SINGLE' && selectedFiles.length === 1) {
+            const singleF = selectedFiles[0];
+            if (singleF.type.startsWith('image/')) {
+              const compressed = await compressImageIfLarge(singleF);
+              const img = await embedImageSafe(compressed);
+              const page = mergedPdf.addPage([sheetWidth, sheetHeight]);
+              const margin = 18;
+              const availW = sheetWidth - (margin * 2);
+              const availH = sheetHeight - (margin * 2);
+              const s = (paperFitting === 'FILL'
+                ? Math.max(availW / img.width, availH / img.height)
+                : Math.min(availW / img.width, availH / img.height)) * (paperFitting === 'CUSTOM' ? printScale / 100 : 1);
+              const drawW = img.width * s;
+              const drawH = img.height * s;
+              const drawX = margin + (availW - drawW) / 2;
+              const drawY = margin + (availH - drawH) / 2;
+              page.drawImage(img, { x: drawX, y: drawY, width: drawW, height: drawH });
               const mergedBytes = await mergedPdf.save();
-              primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Pages_${customPageRange.replace(/[^a-zA-Z0-9-]/g, '_')}.pdf`, { type: 'application/pdf' });
+              primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Print.pdf`, { type: 'application/pdf' });
+            } else if ((singleF.type === 'application/pdf' || singleF.name.toLowerCase().endsWith('.pdf')) && pageSelectionType === 'custom' && customPageRange.trim()) {
+              const buffer = await singleF.arrayBuffer();
+              const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+              const totalP = doc.getPageCount();
+              const chosen = parsePageRange(customPageRange, totalP);
+              const zeroIndexed = chosen.map(p => p - 1).filter(idx => idx >= 0 && idx < totalP);
+              if (zeroIndexed.length > 0) {
+                const copiedPages = await mergedPdf.copyPages(doc, zeroIndexed);
+                copiedPages.forEach(p => mergedPdf.addPage(p));
+                const mergedBytes = await mergedPdf.save();
+                primaryUploadFile = new File([mergedBytes as any], `${singleF.name.replace(/\.[^/.]+$/, '')}_Pages_${customPageRange.replace(/[^a-zA-Z0-9-]/g, '_')}.pdf`, { type: 'application/pdf' });
+              }
             }
           }
+        } catch (mergeErr) {
+          console.warn('PDF synthesis notice:', mergeErr);
+          primaryUploadFile = file || selectedFiles[0];
         }
-      } catch (mergeErr) {
-        console.warn('PDF synthesis notice:', mergeErr);
-        primaryUploadFile = file || selectedFiles[0];
       }
 
-      // 1. Upload Front / Primary Document
-      try {
-        const uploadFormData = new FormData();
-        uploadFormData.append('file', primaryUploadFile);
-        uploadFormData.append('shopId', shop.id);
-        uploadFormData.append('orderId', 'ord_' + Date.now());
-
-        setUploadProgress(40);
-        const uploadRes = await fetch('/api/upload', {
-          method: 'POST',
-          body: uploadFormData
-        });
-
-        if (uploadRes.ok) {
-          const uploadData = await uploadRes.json();
-          fileDownloadUrl = uploadData.fileUrl;
-          uploadedPublicId = uploadData.publicId || '';
-        } else {
-          fileDownloadUrl = await uploadDocumentToStorage(primaryUploadFile, shop.id, (percent) => {
-            setUploadProgress(percent);
-          });
-        }
-      } catch (err) {
-        console.warn('Front file upload fallback:', err);
-        fileDownloadUrl = URL.createObjectURL(primaryUploadFile);
-      }
+      // 1. Upload Front / Primary Document Direct to Cloudinary CDN
+      setUploadProgress(20);
+      const frontUpload = await uploadDocumentDirect(primaryUploadFile, shop.id, (pct) => {
+        setUploadProgress(Math.min(pct, 85));
+      });
+      fileDownloadUrl = frontUpload.fileUrl;
+      uploadedPublicId = frontUpload.publicId;
 
       // 2. Upload Back File (if in ID mode)
-      if (uploadMode === 'ID_DOUBLE_SIDED' && backFile) {
-        try {
-          const backFormData = new FormData();
-          backFormData.append('file', backFile);
-          backFormData.append('shopId', shop.id);
-          backFormData.append('orderId', 'ord_back_' + Date.now());
-
-          setUploadProgress(70);
-          const backRes = await fetch('/api/upload', {
-            method: 'POST',
-            body: backFormData
-          });
-
-          if (backRes.ok) {
-            const backData = await backRes.json();
-            backFileDownloadUrl = backData.fileUrl;
-            backUploadedPublicId = backData.publicId || '';
-          }
-        } catch (backErr) {
-          console.warn('Back file upload fallback:', backErr);
-          backFileDownloadUrl = URL.createObjectURL(backFile);
-        }
+      if (uploadMode === 'ID_DOUBLE_SIDED' && processedBackFile) {
+        setUploadProgress(85);
+        const backUpload = await uploadDocumentDirect(processedBackFile, shop.id, (pct) => {
+          setUploadProgress(pct);
+        });
+        backFileDownloadUrl = backUpload.fileUrl;
+        backUploadedPublicId = backUpload.publicId;
       }
 
       setUploadProgress(100);
