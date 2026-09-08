@@ -64,6 +64,31 @@ if exist "%SRC_DIR%SumatraPDF-settings.txt" (
     copy /y "%SRC_DIR%agent\SumatraPDF-settings.txt" "%APP_DIR%\SumatraPDF-settings.txt" >nul
 )
 
+:: 3. Configure Shop Slug (Links Laptop Agent to your Shop)
+echo.
+echo --------------------------------------------------------
+echo  SHOP IDENTIFICATION SETUP
+echo --------------------------------------------------------
+set "SAVED_SLUG="
+if exist "%SRC_DIR%config.json" (
+    copy /y "%SRC_DIR%config.json" "%APP_DIR%\config.json" >nul
+    echo [OK] Using pre-configured shop settings from config.json
+) else if exist "%APP_DIR%\config.json" (
+    echo [OK] Found existing shop configuration in %APP_DIR%\config.json
+) else (
+    echo Enter your Shop Slug (Found on your dashboard, e.g. "krishna-xerox")
+    set /p "USER_SLUG=Shop Slug: "
+    if "!USER_SLUG!"=="" set "USER_SLUG=krishna-xerox"
+    (
+        echo {
+        echo   "shopSlug": "!USER_SLUG!",
+        echo   "serverUrl": "https://pageprint.in"
+        echo }
+    ) > "%APP_DIR%\config.json"
+    echo [OK] Saved shop slug "!USER_SLUG!" to %APP_DIR%\config.json
+)
+echo.
+
 :: 3. Generate robust silent launcher VBS
 echo [3/4] Creating silent background launcher...
 set "LAUNCHER_VBS=%APP_DIR%\PagePrint-Silent.vbs"
