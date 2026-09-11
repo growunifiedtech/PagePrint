@@ -383,16 +383,28 @@ async function checkAndProcessQueue(printers) {
         const validPrinters = printers.filter(p => !isVirtualPrinter(p));
         const activeList = validPrinters.length > 0 ? validPrinters : printers;
 
-        // Determine target printer
+        // Universal brand-agnostic printer routing (HP, Canon, Epson, Brother, Ricoh, Xerox, Kyocera, etc.)
         let targetPrinter = order.targetPrinterName;
         if (!targetPrinter || isVirtualPrinter({ Name: targetPrinter }) || !activeList.find(p => p.Name === targetPrinter)) {
-          if (order.colorMode === 'COLOR') {
-            const cp = activeList.find(p => p.Color || p.Name.toLowerCase().includes('color') || p.Name.toLowerCase().includes('epson'));
-            targetPrinter = cp ? cp.Name : (activeList[0] ? activeList[0].Name : 'Default');
+          // If only 1 physical printer exists on this machine, route all jobs (Color & BW) to it!
+          if (activeList.length === 1) {
+            targetPrinter = activeList[0].Name;
+          } else if (order.colorMode === 'COLOR') {
+            // Find any color capable printer across all brands
+            const isColorCapable = (p) => {
+              const str = `${p.Name || ''} ${p.DriverName || ''}`.toLowerCase();
+              return Boolean(p.Color) || str.includes('color') || str.includes('colour') || str.includes('ink') || str.includes('tank') || str.includes('deskjet') || str.includes('pixma');
+            };
+            const cp = activeList.find(p => isColorCapable(p));
+            targetPrinter = cp ? cp.Name : activeList[0].Name;
           } else {
-            // For B&W: Prefer dedicated laser mono, else physical printer (e.g. Epson) in mono mode
-            const bwp = activeList.find(p => !p.Color && !p.Name.toLowerCase().includes('color') && !p.Name.toLowerCase().includes('epson'));
-            targetPrinter = bwp ? bwp.Name : (activeList[0] ? activeList[0].Name : 'Default');
+            // For B&W: Prefer a dedicated monochrome laser printer if present, else first physical printer
+            const isMono = (p) => {
+              const str = `${p.Name || ''} ${p.DriverName || ''}`.toLowerCase();
+              return (!p.Color && !str.includes('color') && !str.includes('colour')) && (str.includes('laser') || str.includes('mono') || str.includes('dcp') || str.includes('lbp') || str.includes('m1') || str.includes('1020') || str.includes('2900'));
+            };
+            const bwp = activeList.find(p => isMono(p));
+            targetPrinter = bwp ? bwp.Name : activeList[0].Name;
           }
         }
 

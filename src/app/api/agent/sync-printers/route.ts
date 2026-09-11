@@ -34,19 +34,28 @@ export async function POST(req: NextRequest) {
 
     // Map real Windows physical printers detected by PowerShell Get-Printer
     const realPrinters: PrinterDevice[] = effectivePrinters.map((p: any, idx: number) => {
-      const isColor = Boolean(p.Color) || 
-        p.Name?.toLowerCase().includes('color') || 
-        p.DriverName?.toLowerCase().includes('color') ||
-        p.DriverName?.toLowerCase().includes('epson') ||
-        p.DriverName?.toLowerCase().includes('deskjet') ||
-        p.DriverName?.toLowerCase().includes('inktank') ||
-        p.DriverName?.toLowerCase().includes('canon') ||
-        p.DriverName?.toLowerCase().includes('hp');
+      const infoStr = `${p.Name || ''} ${p.DriverName || ''}`.toLowerCase();
 
+      // Universal color detection across HP, Canon, Epson, Brother, Xerox, Ricoh, etc.
+      const isColor = Boolean(p.Color) || 
+        infoStr.includes('color') || 
+        infoStr.includes('colour') || 
+        infoStr.includes('ink') || 
+        infoStr.includes('tank') || 
+        infoStr.includes('deskjet') || 
+        infoStr.includes('pixma') ||
+        infoStr.includes('smart tank') ||
+        infoStr.includes('ecotank') ||
+        infoStr.includes('megatank') ||
+        infoStr.includes('officejet');
+
+      // Universal hardware auto-duplex detection across all printer manufacturers
       const isDuplex = Boolean(p.Duplex) || 
-        p.Name?.toLowerCase().includes('duplex') || 
-        p.DriverName?.toLowerCase().includes('imageRUNNER') ||
-        p.DriverName?.toLowerCase().includes('laserjet');
+        infoStr.includes('duplex') || 
+        infoStr.includes('dn') || 
+        infoStr.includes('dw') || 
+        infoStr.includes('fdn') || 
+        infoStr.includes('fdw');
 
       return {
         id: 'win_' + String(p.PortName || idx).replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + Date.now(),
