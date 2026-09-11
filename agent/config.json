@@ -1,4 +1,4 @@
-﻿{
-  " shopSlug\: \abcd\,
- \serverUrl\: \https://www.pageprint.in\
+{
+  "shopSlug": "abcd",
+  "serverUrl": "https://www.pageprint.in"
 }

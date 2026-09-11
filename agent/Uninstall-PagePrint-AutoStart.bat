@@ -12,6 +12,8 @@ if exist "%STARTUP_DIR%\PagePrint-AutoStart.vbs" (
     echo [INFO] PagePrint auto-start was not registered.
 )
 
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PagePrint" /f >nul 2>&1
+
 taskkill /f /im PagePrint.exe 2>nul
 echo [OK] Stopped background PagePrint processes.
 echo.

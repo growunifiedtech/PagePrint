@@ -64,6 +64,18 @@ if exist "%SRC_DIR%SumatraPDF-settings.txt" (
     copy /y "%SRC_DIR%agent\SumatraPDF-settings.txt" "%APP_DIR%\SumatraPDF-settings.txt" >nul
 )
 
+:: Copy config.json if present
+if exist "%SRC_DIR%config.json" (
+    copy /y "%SRC_DIR%config.json" "%APP_DIR%\config.json" >nul
+) else if exist "%SRC_DIR%agent\config.json" (
+    copy /y "%SRC_DIR%agent\config.json" "%APP_DIR%\config.json" >nul
+)
+
+:: Strip Windows Zone.Identifier (removes "Open File - Security Warning")
+echo [*] Removing Windows download security blocks...
+powershell -ExecutionPolicy Bypass -NoProfile -Command "Get-ChildItem -Path '%APP_DIR%' -Recurse -Force -ErrorAction SilentlyContinue | Unblock-File; if (Test-Path '%PAGEPRINT_SRC%') { Unblock-File -Path '%PAGEPRINT_SRC%' -ErrorAction SilentlyContinue }" >nul 2>&1
+
+
 :: 3. Generate robust silent launcher VBS
 echo [3/4] Creating silent background launcher...
 set "LAUNCHER_VBS=%APP_DIR%\PagePrint-Silent.vbs"
@@ -74,7 +86,11 @@ echo appDir = "%APP_DIR%"
 echo exePath = appDir ^& "\PagePrint.exe"
 echo WshShell.CurrentDirectory = appDir
 echo If fso.FileExists^(exePath^) Then
-echo     WshShell.Run Chr^(34^) ^& exePath ^& Chr^(34^), 0, False
+echo     logDir = appDir ^& "\temp"
+echo     If Not fso.FolderExists^(logDir^) Then fso.CreateFolder^(logDir^)
+echo     logPath = logDir ^& "\agent.log"
+echo     cmdStr = "cmd.exe /c " ^& Chr^(34^) ^& Chr^(34^) ^& exePath ^& Chr^(34^) ^& " > " ^& Chr^(34^) ^& logPath ^& Chr^(34^) ^& " 2>&1" ^& Chr^(34^)
+echo     WshShell.Run cmdStr, 0, False
 echo Else
 echo     MsgBox "PagePrint.exe was not found at:" ^& vbCrLf ^& exePath ^& vbCrLf ^& vbCrLf ^& "Please run Install-PagePrint-AutoStart.bat again.", vbCritical, "PagePrint Service Error"
 echo End If
@@ -84,8 +100,11 @@ echo End If
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "STARTUP_VBS=%STARTUP_DIR%\PagePrint-AutoStart.vbs"
 
-echo [4/4] Registering into Windows Startup...
+echo [4/4] Registering into Windows Startup & Registry...
 copy /y "%LAUNCHER_VBS%" "%STARTUP_VBS%" >nul
+powershell -ExecutionPolicy Bypass -NoProfile -Command "Unblock-File -Path '%STARTUP_VBS%' -ErrorAction SilentlyContinue" >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PagePrint" /t REG_SZ /d "wscript.exe \"%LAUNCHER_VBS%\"" /f >nul 2>&1
+
 
 :: Terminate previous instance if running
 taskkill /f /im PagePrint.exe >nul 2>&1

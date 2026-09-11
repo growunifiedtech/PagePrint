@@ -111,6 +111,11 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
   // Upload progress & loading
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [preUploadState, setPreUploadState] = useState<{
+    fileRef: File | null;
+    promise: Promise<{ fileUrl: string; publicId: string }> | null;
+    result: { fileUrl: string; publicId: string } | null;
+  }>({ fileRef: null, promise: null, result: null });
 
   // Print Configuration States
   const [colorMode, setColorMode] = useState<ColorMode>('BW');
@@ -205,32 +210,56 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     const isImg = primary.type.startsWith('image/');
     setPreviewFileType(isPdf ? 'pdf' : isImg ? 'image' : 'other');
 
-    setIsParsingPdf(true);
-    try {
-      const { PDFDocument } = await import('pdf-lib');
-      const counts: number[] = [];
-      for (const f of incoming) {
-        if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
-          try {
-            const buffer = await f.arrayBuffer();
-            const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-            counts.push(Math.max(1, doc.getPageCount()));
-          } catch {
-            counts.push(1);
-          }
-        } else {
-          counts.push(1);
-        }
-      }
-      setFilePageCounts(counts);
-      const total = counts.reduce((a, b) => a + b, 0);
-      setPageCount(total);
-    } catch (err) {
-      console.warn('Page count error:', err);
+    const hasPdf = incoming.some(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+    if (!hasPdf) {
       setFilePageCounts(incoming.map(() => 1));
       setPageCount(incoming.length);
-    } finally {
       setIsParsingPdf(false);
+    } else {
+      setIsParsingPdf(true);
+      try {
+        const { PDFDocument } = await import('pdf-lib');
+        const counts: number[] = [];
+        for (const f of incoming) {
+          if (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) {
+            try {
+              const buffer = await f.arrayBuffer();
+              const doc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+              counts.push(Math.max(1, doc.getPageCount()));
+            } catch {
+              counts.push(1);
+            }
+          } else {
+            counts.push(1);
+          }
+        }
+        setFilePageCounts(counts);
+        const total = counts.reduce((a, b) => a + b, 0);
+        setPageCount(total);
+      } catch (err) {
+        console.warn('Page count error:', err);
+        setFilePageCounts(incoming.map(() => 1));
+        setPageCount(incoming.length);
+      } finally {
+        setIsParsingPdf(false);
+      }
+    }
+
+    // Instant Background Pre-Upload for single document/photo
+    if (incoming.length === 1 && shop?.id) {
+      const singleFile = incoming[0];
+      const p = (async () => {
+        const compressed = await compressImageIfLarge(singleFile);
+        return uploadDocumentDirect(compressed, shop.id, () => {});
+      })();
+      setPreUploadState({ fileRef: singleFile, promise: p, result: null });
+      p.then((res) => {
+        setPreUploadState({ fileRef: singleFile, promise: null, result: res });
+      }).catch((e) => {
+        console.warn('Pre-upload notice:', e);
+      });
+    } else {
+      setPreUploadState({ fileRef: null, promise: null, result: null });
     }
 
     if (incoming.length > 1) {
@@ -366,17 +395,17 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
     []
   );
 
-  // Instant client-side photo compression for camera uploads (down to ~600 KB with 300 DPI clarity)
+  // Instant client-side photo compression for camera uploads (down to ~250 KB with 300 DPI clarity)
   const compressImageIfLarge = async (f: File): Promise<File> => {
     if (!f || !f.type.startsWith('image/')) return f;
-    if (f.size < 1.5 * 1024 * 1024) return f;
+    if (f.size < 350 * 1024) return f;
 
     return new Promise((resolve) => {
       const img = new window.Image();
       const url = URL.createObjectURL(f);
       img.onload = () => {
         URL.revokeObjectURL(url);
-        const maxDim = 2400; // 300 DPI on 8-inch A4 width
+        const maxDim = 1800; // Crisp 220-300 DPI on standard paper, under 250 KB file size
         let w = img.width;
         let h = img.height;
         if (w > maxDim || h > maxDim) {
@@ -403,7 +432,7 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
             }
           },
           'image/jpeg',
-          0.88
+          0.82
         );
       };
       img.onerror = () => resolve(f);
@@ -716,12 +745,24 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
       }
 
       // 1. Upload Front / Primary Document Direct to Cloudinary CDN
-      setUploadProgress(20);
-      const frontUpload = await uploadDocumentDirect(primaryUploadFile, shop.id, (pct) => {
-        setUploadProgress(Math.min(pct, 85));
-      });
-      fileDownloadUrl = frontUpload.fileUrl;
-      uploadedPublicId = frontUpload.publicId;
+      if (preUploadState.fileRef === (file || selectedFiles[0]) && preUploadState.result && isSinglePdfAllPages) {
+        fileDownloadUrl = preUploadState.result.fileUrl;
+        uploadedPublicId = preUploadState.result.publicId;
+        setUploadProgress(100);
+      } else if (preUploadState.fileRef === (file || selectedFiles[0]) && preUploadState.promise && isSinglePdfAllPages) {
+        setUploadProgress(60);
+        const frontUpload = await preUploadState.promise;
+        fileDownloadUrl = frontUpload.fileUrl;
+        uploadedPublicId = frontUpload.publicId;
+        setUploadProgress(100);
+      } else {
+        setUploadProgress(20);
+        const frontUpload = await uploadDocumentDirect(primaryUploadFile, shop.id, (pct) => {
+          setUploadProgress(Math.min(pct, 85));
+        });
+        fileDownloadUrl = frontUpload.fileUrl;
+        uploadedPublicId = frontUpload.publicId;
+      }
 
       // 2. Upload Back File (if in ID mode)
       if (uploadMode === 'ID_DOUBLE_SIDED' && processedBackFile) {
@@ -776,8 +817,8 @@ export default function ShopUploadPage({ params }: { params: Promise<{ slug: str
         paymentId: paymentType === 'UPI' ? `UPI_${Date.now()}` : `CASH_${Date.now()}`,
         printStatus: 'QUEUED',
         targetPrinterName: colorMode === 'COLOR' 
-          ? shop.activePrinters?.find(p => p.supportsColor)?.name || 'Color Printer' 
-          : shop.activePrinters?.find(p => !p.supportsColor)?.name || 'Laser B&W',
+          ? shop.activePrinters?.find(p => p.supportsColor)?.name || (shop.activePrinters?.[0]?.name || 'Color Printer') 
+          : shop.activePrinters?.find(p => !p.supportsColor)?.name || (shop.activePrinters?.[0]?.name || 'Default Printer'),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };

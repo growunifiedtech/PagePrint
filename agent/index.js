@@ -39,26 +39,47 @@ if (!fs.existsSync(CONFIG.tempDir)) {
   fs.mkdirSync(CONFIG.tempDir, { recursive: true });
 }
 
+function log(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  try {
+    fs.appendFileSync(path.join(CONFIG.tempDir, 'agent.log'), line + '\n');
+  } catch (e) {}
+  try {
+    process.stdout.write(line + '\n');
+  } catch (e) {}
+}
+
+process.on('uncaughtException', (err) => {
+  log(`CRASH uncaughtException: ${err ? (err.stack || err.message) : err}`);
+});
+process.on('unhandledRejection', (reason) => {
+  log(`CRASH unhandledRejection: ${reason ? (reason.stack || reason.message || reason) : reason}`);
+});
+
 function promptShopSlug() {
   return new Promise((resolve) => {
     if (CONFIG.shopSlug && CONFIG.shopSlug.trim()) {
       return resolve(CONFIG.shopSlug.trim());
     }
+    if (!process.stdin.isTTY) {
+      CONFIG.shopSlug = 'abcd';
+      return resolve('abcd');
+    }
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout
     });
-    console.log('\n====================================================');
-    console.log(' FIRST-TIME SETUP: Please enter your Shop Slug');
-    console.log(' (Found on your dashboard: e.g. "krishna-xerox")');
-    console.log('====================================================');
+    log('\n====================================================');
+    log(' FIRST-TIME SETUP: Please enter your Shop Slug');
+    log(' (Found on your dashboard: e.g. "krishna-xerox")');
+    log('====================================================');
     rl.question('Enter Shop Slug: ', (slugAns) => {
       const slug = slugAns.trim() || 'krishna-xerox';
       CONFIG.shopSlug = slug;
       
-      console.log('\nServer Environment:');
-      console.log(' 1. Cloud Production (https://www.pageprint.in) [Default]');
-      console.log(' 2. Localhost Test   (http://localhost:3000)');
+      log('\nServer Environment:');
+      log(' 1. Cloud Production (https://www.pageprint.in) [Default]');
+      log(' 2. Localhost Test   (http://localhost:3000)');
       rl.question('Choose Server [1 or 2, default 1]: ', (srvAns) => {
         rl.close();
         if (srvAns.trim() === '2') {
@@ -69,7 +90,7 @@ function promptShopSlug() {
 
         try {
           fs.writeFileSync(CONFIG_FILE, JSON.stringify({ shopSlug: slug, serverUrl: CONFIG.serverUrl }, null, 2));
-          console.log(`\n✅ Saved configuration to ${CONFIG_FILE}\n`);
+          log(`\n✅ Saved configuration to ${CONFIG_FILE}\n`);
         } catch (err) {}
         resolve(slug);
       });
@@ -170,21 +191,46 @@ function downloadFile(fileUrl, destPath) {
   });
 }
 
-// 1. Detect Installed Windows Printers
+// Virtual printer detection (filters out OneNote, PDF printers, Fax, etc.)
+function isVirtualPrinter(p) {
+  const text = `${p.Name || ''} ${p.DriverName || ''} ${p.PortName || ''}`.toLowerCase();
+  const virtualTokens = [
+    'onenote',
+    'print to pdf',
+    'microsoft print to pdf',
+    'xps',
+    'fax',
+    'pdf printer',
+    'adobe pdf',
+    'foxit',
+    'cuteftp',
+    'send to',
+    'nul:',
+    'portprompt:'
+  ];
+  return virtualTokens.some(token => text.includes(token));
+}
+
+// 1. Detect Installed Windows Hardware Printers
 function detectWindowsPrinters() {
   return new Promise((resolve) => {
     const cmd = 'powershell -Command "Get-Printer | Select-Object Name, DriverName, PortName, Duplex, Color | ConvertTo-Json"';
-    exec(cmd, (error, stdout) => {
+    exec(cmd, { windowsHide: true }, (error, stdout) => {
       if (error) {
-        console.warn('Could not query PowerShell Get-Printer:', error.message);
+        log('Could not query PowerShell Get-Printer:', error.message);
         return resolve([]);
       }
       try {
         const parsed = JSON.parse(stdout);
-        const list = Array.isArray(parsed) ? parsed : [parsed];
-        console.log(`✅ Detected ${list.length} installed Windows printer(s):`);
+        const rawList = Array.isArray(parsed) ? parsed : [parsed];
+        
+        // Filter out virtual printers so only real hardware printers are registered
+        const physical = rawList.filter(p => !isVirtualPrinter(p));
+        const list = physical.length > 0 ? physical : rawList;
+
+        log(`✅ Detected ${list.length} physical Windows printer(s):`);
         list.forEach(p => {
-          console.log(`   • ${p.Name} [Driver: ${p.DriverName}]`);
+          log(`   • ${p.Name} [Driver: ${p.DriverName}]`);
         });
         resolve(list);
       } catch (err) {
@@ -204,37 +250,43 @@ async function syncPrintersToCloud(printers) {
       printers: printers
     });
     if (res.status === 200) {
-      console.log(`✅ Hardware printers synced with cloud for shop "${CONFIG.shopSlug}"!`);
+      log(`✅ Hardware printers synced with cloud for shop "${CONFIG.shopSlug}"!`);
+    } else {
+      log(`⚠️ Cloud sync responded with status ${res.status}`);
     }
   } catch (err) {
-    console.warn('⚠️ Cloud sync note:', err.message);
+    log('⚠️ Cloud sync note:', err.message);
   }
 }
 
-// 3. Silent Print PDF via Windows Spooler (SumatraPDF engine with PowerShell fallback)
+// 3. Silent Print PDF via Windows Spooler (SumatraPDF native silent engine)
 async function printJob(order, filePath, printerName) {
   return new Promise((resolve) => {
     const copies = Math.max(1, order.copies || 1);
     const target = printerName && printerName !== 'Default' ? printerName : 'Windows Default Printer';
-    console.log(`🖨️ [SPOOLER] Spooling "${order.fileName}" -> "${target}" (${copies} ${copies === 1 ? 'copy' : 'copies'}, ${order.isDuplex ? 'Duplex' : 'Single'}, ${order.colorMode || 'BW'})...`);
+    log(`🖨️ [SPOOLER] Spooling "${order.fileName}" -> "${target}" (${copies} ${copies === 1 ? 'copy' : 'copies'}, ${order.isDuplex ? 'Duplex' : 'Single'}, ${order.colorMode || 'BW'})...`);
 
-    // Check for bundled SumatraPDF binary (Zero install, native Windows silent printing)
-    const sumatraExe = path.join(baseDir, 'SumatraPDF.exe');
-    const sumatraNodeModules = path.join(baseDir, 'node_modules', 'pdf-to-printer', 'dist', 'SumatraPDF-3.4.6-32.exe');
-    const sumatraPath = fs.existsSync(sumatraExe) ? sumatraExe : (fs.existsSync(sumatraNodeModules) ? sumatraNodeModules : null);
+    // Search for SumatraPDF in all candidate directories
+    const candidatePaths = [
+      path.join(baseDir, 'SumatraPDF.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'PagePrint', 'SumatraPDF.exe'),
+      'C:\\Users\\zppsc\\AppData\\Local\\PagePrint\\SumatraPDF.exe',
+      path.join(baseDir, 'node_modules', 'pdf-to-printer', 'dist', 'SumatraPDF-3.4.6-32.exe')
+    ];
+    const sumatraPath = candidatePaths.find(p => fs.existsSync(p));
 
     const cleanupAndResolve = () => {
       try {
         if (fs.existsSync(filePath)) {
           fs.unlinkSync(filePath);
-          console.log('   🔒 Local temporary file permanently wiped for privacy.');
+          log('   🔒 Local temporary file permanently wiped for privacy.');
         }
       } catch (e) {}
       resolve(true);
     };
 
     if (sumatraPath) {
-      const printSettings = [];
+      const printSettings = ['shrink', 'fit'];
       if (copies > 1) printSettings.push(`${copies}x`);
       if (order.isDuplex) {
         printSettings.push('duplexlong');
@@ -250,37 +302,42 @@ async function printJob(order, filePath, printerName) {
         printSettings.push(`paper=${order.paperSize}`);
       }
 
-      const settingsArg = printSettings.length > 0 ? `-print-settings "${printSettings.join(',')}"` : '';
+      const settingsArg = `-print-settings "${printSettings.join(',')}"`;
       const printerArg = (printerName && printerName !== 'Default')
         ? `-print-to "${printerName}"`
         : `-print-to-default`;
 
       const sumatraCmd = `"${sumatraPath}" ${printerArg} -silent ${settingsArg} "${filePath}"`;
 
-      exec(sumatraCmd, (err) => {
+      exec(sumatraCmd, { windowsHide: true }, (err) => {
         if (err) {
-          console.warn('   ⚠️ SumatraPDF notice, trying PowerShell fallback:', err.message);
-          runPowerShell();
+          log('   ⚠️ Spooler notice:', err.message);
         } else {
-          console.log(`   ✓ Successfully spooled ${copies} ${copies === 1 ? 'copy' : 'copies'} via SumatraPDF engine!`);
-          cleanupAndResolve();
+          log(`   ✓ Successfully spooled ${copies} ${copies === 1 ? 'copy' : 'copies'} silently to ${target}!`);
         }
+        cleanupAndResolve();
       });
     } else {
-      runPowerShell();
-    }
-
-    function runPowerShell() {
+      // Fallback: PowerShell raw spool without opening GUI PDF viewer dialogs
       const safeFilePath = filePath.replace(/'/g, "''");
-      const psCommand = (!printerName || printerName === 'Default')
-        ? `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb Print -PassThru | Wait-Process -Timeout 15 }"`
-        : `powershell -Command "1..${copies} | ForEach-Object { Start-Process -FilePath '${safeFilePath}' -Verb PrintTo -ArgumentList '${printerName.replace(/'/g, "''")}' -PassThru | Wait-Process -Timeout 15 }"`;
+      const printerParam = (!printerName || printerName === 'Default')
+        ? "(Get-CimInstance Win32_Printer -Filter 'Default = True').Name"
+        : `'${printerName.replace(/'/g, "''")}'`;
 
-      exec(psCommand, (err) => {
+      const psScript = `
+        Add-Type -AssemblyName System.Drawing
+        1..${copies} | ForEach-Object {
+          $p = ${printerParam}
+          Start-Process -FilePath '${safeFilePath}' -Verb PrintTo -ArgumentList $p -WindowStyle Hidden | Out-Null
+        }
+      `;
+      const psCommand = `powershell -WindowStyle Hidden -Command "${psScript.replace(/\r?\n\s*/g, ' ')}"`;
+
+      exec(psCommand, { windowsHide: true }, (err) => {
         if (err) {
-          console.warn('   ⚠️ Print command notice:', err.message);
+          log('   ⚠️ Spooler command notice:', err.message);
         } else {
-          console.log(`   ✓ Successfully handed off ${copies} ${copies === 1 ? 'copy' : 'copies'} to Windows Spooler`);
+          log(`   ✓ Handed off ${copies} ${copies === 1 ? 'copy' : 'copies'} to Windows Spooler`);
         }
         cleanupAndResolve();
       });
@@ -302,12 +359,11 @@ async function checkAndProcessQueue(printers) {
 
     if (res.status === 200 && res.data && Array.isArray(res.data.orders) && res.data.orders.length > 0) {
       // Outage Recovery: If agent just booted up / reconnected, any unfinished PRINTING jobs were interrupted.
-      // Immediately hold them for confirmation so the dashboard shows the instant "Resume Print" button.
       if (isFirstCheckAfterStartup) {
         isFirstCheckAfterStartup = false;
         for (const order of res.data.orders) {
-          console.log(`\n⚠️ [OUTAGE DETECTED] Token #${order.tokenNumber} was interrupted by power or internet outage.`);
-          console.log(`   Holding on dashboard for shopkeeper to click "Resume Print" (auto-cancels in 10 mins).`);
+          log(`\n⚠️ [OUTAGE DETECTED] Token #${order.tokenNumber} was interrupted by power or internet outage.`);
+          log(`   Holding on dashboard for shopkeeper to click "Resume Print" (auto-cancels in 10 mins).`);
           try {
             await makeRequest(`${CONFIG.serverUrl}/api/agent/queue`, 'POST', {
               orderId: order.id,
@@ -321,18 +377,22 @@ async function checkAndProcessQueue(printers) {
       isFirstCheckAfterStartup = false;
 
       for (const order of res.data.orders) {
-        console.log(`\n⚡ [NEW JOB] Token #${order.tokenNumber} | ${order.fileName} (${order.effectivePageCount} pages, ${order.colorMode})`);
+        log(`\n⚡ [NEW JOB] Token #${order.tokenNumber} | ${order.fileName} (${order.effectivePageCount} pages, ${order.colorMode})`);
+
+        // Filter valid printers and exclude virtual ones
+        const validPrinters = printers.filter(p => !isVirtualPrinter(p));
+        const activeList = validPrinters.length > 0 ? validPrinters : printers;
 
         // Determine target printer
         let targetPrinter = order.targetPrinterName;
-        if (!targetPrinter || !printers.find(p => p.Name === targetPrinter)) {
-          // Auto route: Color to color printer, BW to monochrome
+        if (!targetPrinter || isVirtualPrinter({ Name: targetPrinter }) || !activeList.find(p => p.Name === targetPrinter)) {
           if (order.colorMode === 'COLOR') {
-            const cp = printers.find(p => p.Color || p.Name.toLowerCase().includes('color') || p.Name.toLowerCase().includes('epson'));
-            targetPrinter = cp ? cp.Name : (printers[0] ? printers[0].Name : 'Default');
+            const cp = activeList.find(p => p.Color || p.Name.toLowerCase().includes('color') || p.Name.toLowerCase().includes('epson'));
+            targetPrinter = cp ? cp.Name : (activeList[0] ? activeList[0].Name : 'Default');
           } else {
-            const bwp = printers.find(p => !p.Color && !p.Name.toLowerCase().includes('color'));
-            targetPrinter = bwp ? bwp.Name : (printers[0] ? printers[0].Name : 'Default');
+            // For B&W: Prefer dedicated laser mono, else physical printer (e.g. Epson) in mono mode
+            const bwp = activeList.find(p => !p.Color && !p.Name.toLowerCase().includes('color') && !p.Name.toLowerCase().includes('epson'));
+            targetPrinter = bwp ? bwp.Name : (activeList[0] ? activeList[0].Name : 'Default');
           }
         }
 
@@ -361,9 +421,9 @@ async function checkAndProcessQueue(printers) {
             backPublicId: order.backPublicId,
             backFileUrl: order.backFileUrl
           });
-          console.log(`✅ Token #${order.tokenNumber} marked PRINTED in cloud. All documents permanently deleted.\n`);
+          log(`✅ Token #${order.tokenNumber} marked PRINTED in cloud. All documents permanently deleted.\n`);
         } catch (jobErr) {
-          console.error(`❌ Failed to print order ${order.id}:`, jobErr.message);
+          log(`❌ Failed to print order ${order.id}:`, jobErr.message);
         }
       }
     }
@@ -376,22 +436,26 @@ async function checkAndProcessQueue(printers) {
 
 // 5. Main Lifecycle
 async function start() {
-  console.log('========================================================');
-  console.log('       PagePrint Windows Auto-Print Desktop Agent       ');
-  console.log('========================================================');
+  log('========================================================');
+  log('       PagePrint Windows Auto-Print Desktop Agent       ');
+  log('========================================================');
   await promptShopSlug();
 
-  console.log('Shop Slug:   ', CONFIG.shopSlug);
-  console.log('Server Host: ', CONFIG.serverUrl);
-  console.log('Spool Dir:   ', CONFIG.tempDir);
-  console.log('--------------------------------------------------------');
+  log(`Shop Slug:    ${CONFIG.shopSlug}`);
+  log(`Server Host:  ${CONFIG.serverUrl}`);
+  log(`Spool Dir:    ${CONFIG.tempDir}`);
+  log('--------------------------------------------------------');
 
   const printers = await detectWindowsPrinters();
-  await syncPrintersToCloud(printers);
+  try {
+    await syncPrintersToCloud(printers);
+  } catch (syncErr) {}
 
-  console.log(`\n⚡ Agent is LIVE & listening for orders on ${CONFIG.serverUrl}...`);
-  console.log('Zero-click printing active. Press Ctrl+C to stop.\n');
+  log(`⚡ Agent is LIVE & listening for orders on ${CONFIG.serverUrl}...`);
+  log('Zero-click printing active. Press Ctrl+C to stop.\n');
 
+  // Immediately check queue once, then every poll interval
+  checkAndProcessQueue(printers);
   setInterval(() => {
     checkAndProcessQueue(printers);
   }, CONFIG.pollIntervalMs);

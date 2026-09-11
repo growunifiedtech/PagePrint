@@ -22,14 +22,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Map real Windows printers detected by PowerShell Get-Printer
-    const realPrinters: PrinterDevice[] = printers.map((p: any, idx: number) => {
+    // Filter out virtual printers (OneNote, Print to PDF, XPS, Fax)
+    const virtualTokens = ['onenote', 'print to pdf', 'xps', 'fax', 'pdf printer', 'adobe pdf', 'send to', 'nul:', 'portprompt:'];
+    const isVirtual = (p: any) => {
+      const text = `${p.Name || p.name || ''} ${p.DriverName || p.driverName || ''} ${p.PortName || p.portName || ''}`.toLowerCase();
+      return virtualTokens.some(tok => text.includes(tok));
+    };
+
+    const physicalPrinters = printers.filter((p: any) => !isVirtual(p));
+    const effectivePrinters = physicalPrinters.length > 0 ? physicalPrinters : printers;
+
+    // Map real Windows physical printers detected by PowerShell Get-Printer
+    const realPrinters: PrinterDevice[] = effectivePrinters.map((p: any, idx: number) => {
       const isColor = Boolean(p.Color) || 
         p.Name?.toLowerCase().includes('color') || 
         p.DriverName?.toLowerCase().includes('color') ||
         p.DriverName?.toLowerCase().includes('epson') ||
         p.DriverName?.toLowerCase().includes('deskjet') ||
-        p.DriverName?.toLowerCase().includes('inktank');
+        p.DriverName?.toLowerCase().includes('inktank') ||
+        p.DriverName?.toLowerCase().includes('canon') ||
+        p.DriverName?.toLowerCase().includes('hp');
 
       const isDuplex = Boolean(p.Duplex) || 
         p.Name?.toLowerCase().includes('duplex') || 
@@ -37,13 +49,13 @@ export async function POST(req: NextRequest) {
         p.DriverName?.toLowerCase().includes('laserjet');
 
       return {
-        id: 'win_' + (p.PortName || idx) + '_' + Date.now(),
-        name: p.Name,
-        driverName: p.DriverName || p.Name,
+        id: 'win_' + String(p.PortName || idx).replace(/[^a-zA-Z0-9_-]/g, '_') + '_' + Date.now(),
+        name: String(p.Name || 'Physical Printer'),
+        driverName: String(p.DriverName || p.Name || 'Generic Driver'),
         isOnline: true,
-        supportsColor: isColor,
-        supportsDuplex: isDuplex,
-        assignedTypes: isColor ? ['COLOR', 'PHOTO'] : ['BW', 'DUPLEX', 'LEGAL'],
+        supportsColor: Boolean(isColor),
+        supportsDuplex: Boolean(isDuplex),
+        assignedTypes: isColor ? ['COLOR', 'PHOTO', 'BW'] : ['BW', 'DUPLEX', 'LEGAL'],
         status: 'IDLE',
         lastPing: new Date().toISOString()
       };

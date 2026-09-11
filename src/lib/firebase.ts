@@ -81,7 +81,8 @@ export async function createShopInCloud(shopData: Omit<Shop, 'id' | 'createdAt'>
  */
 export async function updateShopInCloud(shopId: string, updates: Partial<Shop>): Promise<void> {
   const shopRef = doc(db, 'shops', shopId);
-  await updateDoc(shopRef, updates);
+  const cleanUpdates = removeUndefined(updates);
+  await setDoc(shopRef, { ...cleanUpdates, updatedAt: new Date().toISOString() }, { merge: true });
 }
 
 function removeUndefined<T extends Record<string, any>>(obj: T): Record<string, any> {
