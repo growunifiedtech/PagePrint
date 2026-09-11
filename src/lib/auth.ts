@@ -8,7 +8,7 @@ import {
   User 
 } from 'firebase/auth';
 import { useState, useEffect } from 'react';
-import { auth, getShopByOwnerIdFromCloud, createShopInCloud } from './firebase';
+import { auth, getShopByOwnerIdFromCloud, getShopBySlugFromCloud, createShopInCloud } from './firebase';
 import { Shop } from '@/types';
 
 export function useAuth() {
@@ -38,6 +38,21 @@ export async function loginUser(email: string, pass: string) {
   return signInWithEmailAndPassword(auth, email, pass);
 }
 
+export async function generateUniqueSlug(baseName: string): Promise<string> {
+  const baseSlug = baseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'shop';
+  let candidate = baseSlug;
+  let counter = 1;
+
+  while (true) {
+    const existing = await getShopBySlugFromCloud(candidate);
+    if (!existing) {
+      return candidate;
+    }
+    candidate = `${baseSlug}-${counter}`;
+    counter++;
+  }
+}
+
 export async function registerUserAndShop(
   email: string, 
   pass: string, 
@@ -51,7 +66,7 @@ export async function registerUserAndShop(
   }
 ) {
   const cred = await createUserWithEmailAndPassword(auth, email, pass);
-  const slug = shopInfo.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'my-shop';
+  const slug = await generateUniqueSlug(shopInfo.name);
 
   const newShop = await createShopInCloud({
     ownerId: cred.user.uid,
