@@ -71,6 +71,32 @@ if exist "%SRC_DIR%config.json" (
     copy /y "%SRC_DIR%agent\config.json" "%APP_DIR%\config.json" >nul
 )
 
+:: Configure Shop Slug
+echo.
+echo ------------------------------------------------------------
+echo  PagePrint Shop Pairing
+echo ------------------------------------------------------------
+echo  Find your Shop Slug on your Dashboard (e.g. "krishna-xerox")
+set "CURR_SLUG="
+if exist "%APP_DIR%\config.json" (
+    for /f "tokens=2 delims=:, " %%a in ('findstr /i "shopSlug" "%APP_DIR%\config.json"') do (
+        set "CURR_SLUG=%%~a"
+    )
+)
+if "!CURR_SLUG!"=="" set "CURR_SLUG=abcd"
+
+set /p NEW_SLUG="Enter your Shop Slug [default: !CURR_SLUG!]: "
+if "!NEW_SLUG!"=="" set "NEW_SLUG=!CURR_SLUG!"
+
+(
+    echo {
+    echo   "shopSlug": "!NEW_SLUG!",
+    echo   "serverUrl": "https://www.pageprint.in"
+    echo }
+) > "%APP_DIR%\config.json"
+echo [*] Connected to shop: !NEW_SLUG!
+echo.
+
 :: Strip Windows Zone.Identifier (removes "Open File - Security Warning")
 echo [*] Removing Windows download security blocks...
 powershell -ExecutionPolicy Bypass -NoProfile -Command "Get-ChildItem -Path '%APP_DIR%' -Recurse -Force -ErrorAction SilentlyContinue | Unblock-File; if (Test-Path '%PAGEPRINT_SRC%') { Unblock-File -Path '%PAGEPRINT_SRC%' -ErrorAction SilentlyContinue }" >nul 2>&1
