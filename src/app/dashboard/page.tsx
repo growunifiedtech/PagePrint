@@ -258,7 +258,16 @@ export default function MerchantDashboardPage() {
               <Volume2 className="h-4 w-4" />
             </button>
 
-
+            {/* Walk-in / Manual Upload Button */}
+            <Link
+              href={`/shop/${shop.slug}`}
+              target="_blank"
+              className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3.5 py-2 text-xs font-bold text-white shadow-xs transition active:scale-95"
+              title="Open customer portal to upload walk-in customer files (Pendrive, WhatsApp, Email, etc.)"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              <span>+ Walk-in / Manual Upload</span>
+            </Link>
           </div>
         </div>
       </div>
