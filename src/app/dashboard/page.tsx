@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import { 
   Printer, CheckCircle2, Clock, AlertTriangle, RefreshCw, 
   Settings, ExternalLink, QrCode, Play, Volume2, ShieldCheck, 
-  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User, Trash2, X, Download
+  ArrowUpRight, IndianRupee, FileText, Check, Phone, Eye, Power, LogOut, User, Trash2, X, Download, Smartphone
 } from 'lucide-react';
 import { 
   subscribeToShopOrdersRealtime, updateOrderStatusInCloud, updateShopInCloud, deleteOrderFromCloud 
@@ -391,6 +391,15 @@ export default function MerchantDashboardPage() {
             >
               <Download className="h-3.5 w-3.5" />
               <span>Download Agent (.zip)</span>
+            </a>
+            <a
+              href="/PagePrint.apk"
+              download="PagePrint.apk"
+              className="flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-600 px-3 py-1.5 font-bold text-white transition shadow-sm"
+              title="Download PagePrint Android Merchant App (.apk)"
+            >
+              <Smartphone className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Android App (.apk)</span>
             </a>
             <button
               onClick={() => {

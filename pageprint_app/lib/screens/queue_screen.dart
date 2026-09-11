@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/order_model.dart';
 import '../models/shop_model.dart';
@@ -68,6 +70,363 @@ class _QueueScreenState extends State<QueueScreen> {
         shop: currentShop,
         authService: widget.authService,
         firestoreService: widget.firestoreService,
+      ),
+    );
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open $url')),
+        );
+      }
+    }
+  }
+
+  void _showWalkInSheet(BuildContext context, ShopModel currentShop) {
+    final shopUrl = 'https://www.pageprint.in/shop/${currentShop.slug}';
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.only(top: 16, left: 20, right: 20, bottom: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4F46E5).withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.add_to_photos_rounded,
+                    color: Color(0xFF4F46E5),
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '+ Walk-in / Manual Upload',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      Text(
+                        'Upload files or share counter link with customer',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Option 1: Open Portal
+            InkWell(
+              onTap: () {
+                Navigator.pop(ctx);
+                _openUrl(shopUrl);
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4F46E5),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.cloud_upload_rounded, color: Colors.white, size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Open Upload Portal',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Upload PDF / Photos from phone or WhatsApp',
+                            style: TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 16),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Option 2: Show QR Code
+            InkWell(
+              onTap: () {
+                Navigator.pop(ctx);
+                _showQrDialog(context, currentShop, shopUrl);
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE0E7FF),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.qr_code_2_rounded, color: Color(0xFF4F46E5), size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Show Counter QR Code',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: Color(0xFF1E293B),
+                            ),
+                          ),
+                          Text(
+                            'Customer can scan directly from your phone screen',
+                            style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Option 3: WhatsApp
+            InkWell(
+              onTap: () {
+                Navigator.pop(ctx);
+                final whatsappUrl =
+                    'https://api.whatsapp.com/send?text=${Uri.encodeComponent('Hello! Please upload your documents for printing at ${currentShop.name}:\n$shopUrl')}';
+                _openUrl(whatsappUrl);
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0FDF4),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFBBF7D0)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDCFCE7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.chat_bubble_outline_rounded, color: Color(0xFF16A34A), size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Share via WhatsApp',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: Color(0xFF14532D),
+                            ),
+                          ),
+                          Text(
+                            'Send upload link directly to customer WhatsApp',
+                            style: TextStyle(color: Color(0xFF16A34A), fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: Color(0xFF16A34A)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Option 4: Copy Link
+            InkWell(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: shopUrl));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Copied: $shopUrl'),
+                    backgroundColor: const Color(0xFF10B981),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.copy_rounded, color: Color(0xFF475569), size: 22),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Copy Shop Link',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                              color: Color(0xFF1E293B),
+                            ),
+                          ),
+                          Text(
+                            shopUrl,
+                            style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showQrDialog(BuildContext context, ShopModel currentShop, String shopUrl) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        contentPadding: const EdgeInsets.all(24),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              currentShop.name,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Scan to upload documents',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.network(
+                'https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${Uri.encodeComponent(shopUrl)}',
+                width: 220,
+                height: 220,
+                fit: BoxFit.contain,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return const SizedBox(
+                    width: 220,
+                    height: 220,
+                    child: Center(child: CircularProgressIndicator(color: Color(0xFF4F46E5))),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              shopUrl,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF4F46E5),
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 20),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF4F46E5),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -284,6 +643,17 @@ class _QueueScreenState extends State<QueueScreen> {
                   ],
                 ),
                 actions: [
+                  // Walk-in / Manual Upload Button
+                  IconButton(
+                    icon: const Icon(
+                      Icons.add_to_photos_rounded,
+                      color: Color(0xFF4F46E5),
+                      size: 20,
+                    ),
+                    tooltip: '+ Walk-in / Manual Upload',
+                    onPressed: () => _showWalkInSheet(context, currentShop),
+                  ),
+
                   // Test Chime button
                   IconButton(
                     icon: Icon(
@@ -363,6 +733,89 @@ class _QueueScreenState extends State<QueueScreen> {
                               ),
                             ),
                           ],
+                        ),
+                      ),
+                    ),
+
+                    // Walk-in / Manual Upload Quick Banner
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                        child: InkWell(
+                          onTap: () => _showWalkInSheet(context, currentShop),
+                          borderRadius: BorderRadius.circular(16),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF4F46E5), Color(0xFF4338CA)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF4F46E5).withValues(alpha: 0.25),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: const Icon(
+                                    Icons.add_to_photos_rounded,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '+ Walk-in / Manual Upload',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Upload files or share counter QR with customer',
+                                        style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: const Text(
+                                    'Open ↗',
+                                    style: TextStyle(
+                                      color: Color(0xFF4F46E5),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -459,8 +912,22 @@ class _QueueScreenState extends State<QueueScreen> {
                         ),
                       ),
 
-                    const SliverToBoxAdapter(child: SizedBox(height: 40)),
+                    const SliverToBoxAdapter(child: SizedBox(height: 80)),
                   ],
+                ),
+              ),
+              floatingActionButton: FloatingActionButton.extended(
+                onPressed: () => _showWalkInSheet(context, currentShop),
+                backgroundColor: const Color(0xFF4F46E5),
+                foregroundColor: Colors.white,
+                elevation: 4,
+                icon: const Icon(Icons.add_to_photos_rounded, size: 20),
+                label: const Text(
+                  '+ Walk-in / Manual Upload',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
                 ),
               ),
             );
