@@ -112,32 +112,30 @@ echo appDir = "%APP_DIR%"
 echo exePath = appDir ^& "\PagePrint.exe"
 echo WshShell.CurrentDirectory = appDir
 echo If fso.FileExists^(exePath^) Then
-echo     logDir = appDir ^& "\temp"
-echo     If Not fso.FolderExists^(logDir^) Then fso.CreateFolder^(logDir^)
-echo     logPath = logDir ^& "\agent.log"
-echo     cmdStr = "cmd.exe /c " ^& Chr^(34^) ^& Chr^(34^) ^& exePath ^& Chr^(34^) ^& " > " ^& Chr^(34^) ^& logPath ^& Chr^(34^) ^& " 2>&1" ^& Chr^(34^)
-echo     WshShell.Run cmdStr, 0, False
+echo     WshShell.Run Chr^(34^) ^& exePath ^& Chr^(34^), 0, False
 echo Else
 echo     MsgBox "PagePrint.exe was not found at:" ^& vbCrLf ^& exePath ^& vbCrLf ^& vbCrLf ^& "Please run Install-PagePrint-AutoStart.bat again.", vbCritical, "PagePrint Service Error"
 echo End If
 ) > "%LAUNCHER_VBS%"
+powershell -ExecutionPolicy Bypass -NoProfile -Command "Unblock-File -Path '%LAUNCHER_VBS%' -ErrorAction SilentlyContinue" >nul 2>&1
 
-:: 4. Register to Windows Startup folder
+:: 4. Register to Windows Startup folder & Clean legacy registry
+echo [4/4] Registering into Windows Startup folder...
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "STARTUP_VBS=%STARTUP_DIR%\PagePrint-AutoStart.vbs"
+if exist "%STARTUP_DIR%\PagePrint-AutoStart.vbs" del /f /q "%STARTUP_DIR%\PagePrint-AutoStart.vbs" >nul 2>&1
 
-echo [4/4] Registering into Windows Startup & Registry...
-copy /y "%LAUNCHER_VBS%" "%STARTUP_VBS%" >nul
-powershell -ExecutionPolicy Bypass -NoProfile -Command "Unblock-File -Path '%STARTUP_VBS%' -ErrorAction SilentlyContinue" >nul 2>&1
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PagePrint" /t REG_SZ /d "wscript.exe \"%LAUNCHER_VBS%\"" /f >nul 2>&1
+:: Clean any legacy/corrupted registry run entries that cause popups
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PagePrint" /f >nul 2>&1
 
+:: Create official Windows Startup Shortcut (.lnk)
+powershell -ExecutionPolicy Bypass -NoProfile -Command "$wsh = New-Object -ComObject WScript.Shell; $sc = $wsh.CreateShortcut('%STARTUP_DIR%\PagePrint.lnk'); $sc.TargetPath = '%APP_DIR%\PagePrint-Silent.vbs'; $sc.WorkingDirectory = '%APP_DIR%'; $sc.WindowStyle = 7; $sc.Description = 'PagePrint Silent Background Print Agent'; $sc.Save()" >nul 2>&1
 
 :: Terminate previous instance if running
 taskkill /f /im PagePrint.exe >nul 2>&1
 
 :: Launch now via Windows Script Host
 echo Starting PagePrint service in background...
-wscript.exe "%STARTUP_VBS%"
+wscript.exe "%LAUNCHER_VBS%"
 
 timeout /t 2 >nul
 
